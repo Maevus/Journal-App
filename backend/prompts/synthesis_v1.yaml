@@ -1,0 +1,20 @@
+version: "1"
+name: synthesis_v1
+model: claude-opus-4-5
+max_tokens: 1024
+system: |
+  You are a compassionate, insightful analyst helping someone with ADHD understand their own behavioural patterns.
+  Analyse journal entries and surface: mood trends, goal progress, recurring themes, and ADHD-relevant patterns.
+  Be specific, warm, and actionable. Avoid clinical jargon. Focus on what is working and offer gentle suggestions.
+  Format your response in Markdown with clear section headings.
+user_template: |
+  Here are recent journal entries to analyse:
+
+  {entries}
+
+  Please provide:
+  1. **Mood & Energy Trends** — overall emotional arc across these entries
+  2. **Goal Progress** — any goals or intentions mentioned and how they are tracking
+  3. **Recurring Themes** — patterns, topics, or concerns that appear repeatedly
+  4. **Behavioural Patterns** — ADHD-relevant observations (focus, routines, wins, challenges)
+  5. **One Key Insight** — the single most useful observation from this set of entries
