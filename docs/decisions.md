@@ -6,6 +6,15 @@
 - SSE not WebSockets for LLM streaming
 - Vite + React 19 + TS, FastAPI + Python 3.13
 
+## Ingestion pipeline session (2026-05-22)
+
+- **`GOOGLE_APP_MASTER_TOKEN` env var name** — gkeepapi token key is `GOOGLE_APP_MASTER_TOKEN` (not `GOOGLE_MASTER_TOKEN`); value was originally malformed (extra dict content from raw Python login response) — trimmed to bare `aas_et/…=` token
+- **`GOODNOTES_ICLOUD_PATH` corrected** — was `~/Users/maeve/Library/…` (double path); fixed to `~/Library/Mobile Documents/…`
+- **GoodNotes PDFs include OCR text layer** — `pypdf` extraction is sufficient; Claude vision fallback for PDFs removed. Vision retained only for raw `.png`/`.jpg`/`.jpeg` image files
+- **`Keep.resume` → `Keep.authenticate`** — gkeepapi renamed this method in current version
+- **iCloud Drive requires terminal FDA** — uvicorn must be launched from a terminal with Full Disk Access; Claude Code's process is insufficient. Dev workaround: `GOODNOTES_ICLOUD_PATH=~/Downloads`
+- **`ingest_keep` uses `run_in_executor`** — gkeepapi is synchronous; wrapped to avoid blocking the event loop
+
 ## Scaffold session (2026-05-21)
 
 - **Absolute imports from `backend/`** — backend is not a Python package; run `uvicorn main:app` from within `backend/`, not the repo root
@@ -16,3 +25,9 @@
 - **Tailwind v4 via @tailwindcss/vite** — no tailwind.config.js needed; configured entirely via `@import "tailwindcss"` in index.css
 - **pyyaml added to requirements.txt** — needed to load prompts/synthesis_v1.yaml; implied by the versioned YAML prompt architecture
 - **JournalEntry schema is frozen** — stop and ask before any modification; downstream implications for Chroma IDs, mood scoring, and future migration
+
+## Handwritten note processing (OCR)
+
+- GoodNotes exports may already include OCR text layer — check export format first
+- If not: use GPT-4o vision in the ingestion pipeline to transcribe images
+- Rejected: Tesseract (poor handwriting accuracy), Google Vision (extra service to manage)
