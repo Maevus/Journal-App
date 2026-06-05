@@ -210,6 +210,38 @@ async def ingest_keep(session: Session) -> Tuple[dict, List[JournalEntry]]:
 # ---------------------------------------------------------------------------
 
 
+async def _ensure_local(path: Path) -> Optional[Path]:
+    """
+    Resolve an iCloud eviction placeholder (.{name}.icloud) to the real local file,
+    triggering `brctl download` if needed. Non-iCloud files are returned unchanged.
+    Returns None if the file cannot be made available locally within 30 s.
+    """
+    if not (path.name.startswith(".") and path.suffix == ".icloud"):
+        return path
+
+    # .Journal.pdf.icloud → Journal.pdf
+    real_name = path.stem.lstrip(".")
+    real_path = path.parent / real_name
+
+    if real_path.exists():
+        return real_path
+
+    proc = await asyncio.create_subprocess_exec(
+        "brctl", "download", str(path),
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+    )
+    await proc.wait()
+
+    for _ in range(30):
+        if real_path.exists():
+            return real_path
+        await asyncio.sleep(1)
+
+    logger.warning("iCloud download timed out for %s", path.name)
+    return None
+
+
 async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
     """Scan the iCloud GoodNotes folder and persist new entries (idempotent via content hash)."""
     raw_path = os.environ["GOODNOTES_ICLOUD_PATH"]
@@ -223,12 +255,16 @@ async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
     for path in sorted(folder.rglob("*")):
         if not path.is_file():
             continue
-        suffix = path.suffix.lower()
 
+        resolved = await _ensure_local(path)
+        if resolved is None:
+            continue
+
+        suffix = resolved.suffix.lower()
         if suffix == ".pdf":
-            text = _extract_pdf_text(path)
+            text = _extract_pdf_text(resolved)
         elif suffix in _IMAGE_MEDIA_TYPES:
-            text = await _ocr_with_claude(path.read_bytes(), _IMAGE_MEDIA_TYPES[suffix])
+            text = await _ocr_with_claude(resolved.read_bytes(), _IMAGE_MEDIA_TYPES[suffix])
         else:
             continue
 

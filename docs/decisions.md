@@ -26,6 +26,12 @@
 - **pyyaml added to requirements.txt** — needed to load prompts/synthesis_v1.yaml; implied by the versioned YAML prompt architecture
 - **JournalEntry schema is frozen** — stop and ask before any modification; downstream implications for Chroma IDs, mood scoring, and future migration
 
+## iCloud GoodNotes ingestion (2026-06-05)
+
+- **`_ensure_local` handles evicted files** — iCloud evicts files to a `.{name}.icloud` placeholder; `brctl download` triggers pull, waits up to 30 s for the real file to appear
+- **FDA still required on the terminal** — uvicorn must be launched from a terminal with Full Disk Access; `GOODNOTES_ICLOUD_PATH` can now point directly to the real iCloud path (`~/Library/Mobile Documents/com~apple~CloudDocs/GoodNotes 5 Auto Backup`)
+- **Auto-backup must be enabled in GoodNotes** — GoodNotes → Settings → Auto-Backup → iCloud Drive, set format to PDF
+
 ## Handwritten note processing (OCR)
 
 - GoodNotes exports may already include OCR text layer — check export format first
