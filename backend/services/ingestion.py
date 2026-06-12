@@ -115,12 +115,19 @@ def ingest_entries(
     session: Session,
 ) -> Tuple[dict, List[JournalEntry]]:
     """
-    Persist new entries, skipping duplicates by content hash.
+    Persist entries: insert new ones, update edited ones, skip unchanged ones.
+
+    Dedup is two-tier: an exact content-hash match means the entry is unchanged
+    (skip); otherwise a row with the same source + external_id means the note
+    was edited at its source — it is updated in place (content, hash, date,
+    re-embedded, mood reset) rather than duplicated.
 
     Accepts plain strings (timestamped at ingest time) or RawEntry tuples that
-    carry the source's own authored date. Returns (stats_dict, new_entries).
+    carry the source's own authored date. Returns (stats_dict, entries needing
+    mood scoring — both newly inserted and updated).
     """
     new_entries: List[JournalEntry] = []
+    updated_entries: List[JournalEntry] = []
     skipped = 0
 
     for raw in raw_entries:
@@ -153,6 +160,29 @@ def ingest_entries(
         if inline is not None and (authored_at is None or inline.date() != authored_at.date()):
             authored_at = inline
 
+        if external_id is not None:
+            prior = session.exec(
+                select(JournalEntry).where(
+                    JournalEntry.source == source,
+                    JournalEntry.external_id == external_id,
+                )
+            ).first()
+            if prior is not None:
+                # Same note, new content — edited at the source. Update in
+                # place so edits don't accumulate as stale duplicates.
+                prior.content = content
+                prior.content_hash = content_hash
+                if authored_at is not None:
+                    prior.timestamp = authored_at
+                prior.mood_score = None  # stale for the new text; re-scored below
+                session.add(prior)
+                session.commit()
+                session.refresh(prior)
+
+                embed_and_store(prior.id, content)
+                updated_entries.append(prior)
+                continue
+
         entry = JournalEntry(
             source=source,
             content=content,
@@ -167,7 +197,12 @@ def ingest_entries(
         embed_and_store(entry.id, content)
         new_entries.append(entry)
 
-    return {"ingested": len(new_entries), "skipped": skipped}, new_entries
+    stats = {
+        "ingested": len(new_entries),
+        "updated": len(updated_entries),
+        "skipped": skipped,
+    }
+    return stats, new_entries + updated_entries
 
 
 def redate_inline(session: Session) -> dict:

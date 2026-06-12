@@ -40,6 +40,7 @@ async def ingest(
         gn_stats, gn_entries = await ingest_goodnotes(session)
         stats = {
             "ingested": keep_stats["ingested"] + gn_stats["ingested"],
+            "updated": keep_stats["updated"] + gn_stats["updated"],
             "skipped": keep_stats["skipped"] + gn_stats["skipped"],
         }
         new_entries = keep_entries + gn_entries
