@@ -20,6 +20,7 @@ class SearchResult(BaseModel):
     source: str
     timestamp: str
     similarity_score: float
+    external_id: str | None = None
 
 
 @router.post("")
@@ -63,6 +64,7 @@ async def search(
             source=entry_map[eid].source,
             timestamp=entry_map[eid].timestamp.isoformat(),
             similarity_score=round(combined[eid], 4),
+            external_id=entry_map[eid].external_id,
         )
         for eid in top_ids
         if eid in entry_map

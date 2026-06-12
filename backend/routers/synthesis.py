@@ -1,4 +1,5 @@
 import json
+from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -24,16 +25,26 @@ def _load_prompt() -> dict:
 @router.get("/synthesis")
 async def synthesis(
     limit: int = 20,
+    days: int = 0,  # calendar window; 0 = all time
     session: Session = Depends(get_session),
 ):
-    entries = session.exec(
-        select(JournalEntry).order_by(JournalEntry.timestamp.desc()).limit(limit)
-    ).all()
+    query = select(JournalEntry).order_by(JournalEntry.timestamp.asc())
+    if days > 0:
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        query = query.where(JournalEntry.timestamp >= cutoff)
+    entries = list(session.exec(query).all())
+
+    # Sample evenly across the window so long ranges reflect the whole period
+    # rather than just the `limit` most recent entries.
+    if len(entries) > limit:
+        step = len(entries) / limit
+        entries = [entries[int(i * step)] for i in range(limit)]
 
     cfg = _load_prompt()
 
     if entries:
-        entries_text = "\n---\n".join(
+        period = f"the last {days} days" if days > 0 else "all time"
+        entries_text = f"(Entries spanning {period}, in chronological order.)\n\n" + "\n---\n".join(
             f"[{e.timestamp.date()} | source: {e.source}]\n{e.content}"
             for e in entries
         )

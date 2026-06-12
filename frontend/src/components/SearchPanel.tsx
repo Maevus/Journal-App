@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { searchEntries, type SearchResult } from '../api/client'
+import { searchEntries, sourceNoteUrl, type SearchResult } from '../api/client'
 import { SkeletonLoader } from './SkeletonLoader'
 
 export function SearchPanel() {
@@ -55,10 +55,20 @@ export function SearchPanel() {
         <div className="flex-1 space-y-3 overflow-y-auto">
           {results.map((result) => (
             <div key={result.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-              <div className="mb-1 flex justify-between text-xs text-gray-400">
+              <div className="mb-1 flex items-center gap-3 text-xs text-gray-400">
                 <span className="font-medium uppercase tracking-wide">{result.source}</span>
                 <span>{new Date(result.timestamp).toLocaleDateString()}</span>
                 <span>score {result.similarity_score.toFixed(3)}</span>
+                {sourceNoteUrl(result.source, result.external_id) && (
+                  <a
+                    href={sourceNoteUrl(result.source, result.external_id)!}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="ml-auto font-medium text-indigo-500 hover:text-indigo-700 hover:underline"
+                  >
+                    Open in Keep ↗
+                  </a>
+                )}
               </div>
               <p className="line-clamp-3 text-sm text-gray-700">{result.content}</p>
             </div>
