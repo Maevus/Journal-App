@@ -11,3 +11,6 @@ frontend/node_modules
 *.env
 backend/journal.db
 backend/chroma_db/
+
+# Handoff docs (local-only, persistent across reboot)
+docs/handoffs/

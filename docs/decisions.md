@@ -26,6 +26,10 @@
 - **pyyaml added to requirements.txt** — needed to load prompts/synthesis_v1.yaml; implied by the versioned YAML prompt architecture
 - **JournalEntry schema is frozen** — stop and ask before any modification; downstream implications for Chroma IDs, mood scoring, and future migration
 
+## Custom skills location (2026-06-05)
+
+- **Skills moved from `.agents/skills/` to `.claude/skills/`** — Claude Code only auto-discovers skills under `.claude/skills/`; `.agents/skills/` is a Matt Pocock convention but is not on the harness discovery path. Both directories coexist; `skills-lock.json` still tracks provenance.
+
 ## iCloud GoodNotes ingestion (2026-06-05)
 
 - **`_ensure_local` handles evicted files** — iCloud evicts files to a `.{name}.icloud` placeholder; `brctl download` triggers pull, waits up to 30 s for the real file to appear

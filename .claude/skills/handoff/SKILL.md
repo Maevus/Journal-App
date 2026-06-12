@@ -4,7 +4,14 @@ description: Compact the current conversation into a handoff document for anothe
 argument-hint: "What will the next session be used for?"
 ---
 
-Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save it to a path produced by `mktemp -t handoff-XXXXXX.md` (read the file before you write to it). Save it 
+Write a handoff document summarising the current conversation so a fresh agent can continue the work. Save it to a persistent, project-relative path that survives reboot — create the directory and pick a timestamped filename:
+
+```bash
+mkdir -p docs/handoffs
+out="docs/handoffs/handoff-$(date +%Y%m%d-%H%M%S).md"
+```
+
+Use `$out` as the destination. (`docs/handoffs/` is gitignored — local-only, not committed.) Read the file before you write to it.
 
 Update /docs/decions.md with any key decisions made.
 
