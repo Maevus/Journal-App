@@ -10,10 +10,11 @@ Sources:
 import asyncio
 import base64
 import hashlib
+import io
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
@@ -46,12 +47,14 @@ def compute_hash(content: str) -> str:
 
 
 # Handwritten date headers like "20 Jan 2026", "Wed 5th April", "23rd December",
-# "Monday 15 December 2025". Anchored to the start of the first line so dates
-# mentioned mid-sentence don't match; requires a month name so lines like
-# "Goals 2024" or "1st draft" don't either.
+# "Monday 15 December 2025", "17th of May", "DATE: 15th May", "23d May".
+# Anchored to the start of the first line so dates mentioned mid-sentence
+# don't match; requires a month name so lines like "Goals 2024" or
+# "1st draft" don't either.
 _INLINE_DATE_RE = re.compile(
-    r"^(?:(?:mon|tue(?:s)?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?\s+)?"
-    r"(\d{1,2})(?:st|nd|rd|th)?\s+"
+    r"^(?:date[:\s]+)?"
+    r"(?:(?:mon|tue(?:s)?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?\s+)?"
+    r"(\d{1,2})(?:st|nd|rd|th|d)?\s+(?:of\s+)?"
     r"(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?"
     r"|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
     r"(?:\s+(\d{4}|\d{2}))?\b",
@@ -105,6 +108,10 @@ def parse_inline_date(content: str, fallback: Optional[datetime] = None) -> Opti
 
     # Reject implausible years (typos like "20 Jan 226")
     if best is None or not 2000 <= best.year <= ref.year + 1:
+        return None
+    # Reject future dates — journal entries describe the past; a "future"
+    # header is an OCR misread (e.g. handwritten May read as Nov).
+    if best > datetime.utcnow() + timedelta(days=1):
         return None
     return best
 
@@ -260,7 +267,8 @@ async def score_mood_background(entry_id: int, content: str) -> None:
                 "Score the mood of a journal entry on a scale from 0.0 (very negative) "
                 "to 1.0 (very positive). Return a precise float and a one-sentence reasoning."
             ),
-            max_tokens=128,
+            # Room for score + a sentence of reasoning; 128 truncated mid-JSON
+            max_tokens=256,
         )
 
         with Session(engine) as session:
@@ -274,10 +282,13 @@ async def score_mood_background(entry_id: int, content: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# OCR helper — Claude vision (handles images and image-only PDFs)
+# OCR helper — Claude vision (handwriting transcription)
+# GoodNotes' embedded OCR text layer is too garbled to use; Claude reads the
+# page images directly instead.
 # ---------------------------------------------------------------------------
 
-_OCR_MODEL = "claude-3-5-sonnet-20241022"
+# claude-3-5-sonnet was retired 2025-10-28; sonnet-4-6 is the documented replacement
+_OCR_MODEL = "claude-sonnet-4-6"
 _IMAGE_MEDIA_TYPES: Dict[str, str] = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -285,9 +296,10 @@ _IMAGE_MEDIA_TYPES: Dict[str, str] = {
 }
 
 
-async def _ocr_with_claude(file_bytes: bytes, media_type: str) -> str:
+async def _ocr_with_claude(
+    client: "anthropic.AsyncAnthropic", file_bytes: bytes, media_type: str
+) -> str:
     """Transcribe handwritten or printed content via Claude vision."""
-    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     encoded = base64.standard_b64encode(file_bytes).decode()
 
     if media_type == "application/pdf":
@@ -303,7 +315,7 @@ async def _ocr_with_claude(file_bytes: bytes, media_type: str) -> str:
 
     response = await client.messages.create(
         model=_OCR_MODEL,
-        max_tokens=4096,
+        max_tokens=2048,
         messages=[
             {
                 "role": "user",
@@ -313,7 +325,9 @@ async def _ocr_with_claude(file_bytes: bytes, media_type: str) -> str:
                         "type": "text",
                         "text": (
                             "Transcribe all handwritten or printed text from this journal page. "
-                            "Output only the transcribed text, no commentary."
+                            "If the page starts with a date header, keep it as the first line. "
+                            "Output only the transcribed text, no commentary. "
+                            "If the page is blank or has no text, output exactly [BLANK] and nothing else."
                         ),
                     },
                 ],
@@ -326,16 +340,21 @@ async def _ocr_with_claude(file_bytes: bytes, media_type: str) -> str:
     return ""
 
 
-def _extract_pdf_text(path: Path) -> str:
-    """Extract the text layer from a PDF; returns empty string for scanned/image-only pages."""
+def _split_pdf_pages(path: Path) -> List[bytes]:
+    """Split a PDF into single-page PDFs (bytes), so each page can be OCR'd
+    and ingested as its own journal entry."""
     import pypdf
 
-    parts: List[str] = []
+    pages: List[bytes] = []
     with open(path, "rb") as fh:
         reader = pypdf.PdfReader(fh)
         for page in reader.pages:
-            parts.append(page.extract_text() or "")
-    return "\n".join(parts)
+            writer = pypdf.PdfWriter()
+            writer.add_page(page)
+            buf = io.BytesIO()
+            writer.write(buf)
+            pages.append(buf.getvalue())
+    return pages
 
 
 # ---------------------------------------------------------------------------
@@ -468,18 +487,81 @@ async def _ensure_local(path: Path) -> Optional[Path]:
     return None
 
 
+def _rescue_regressed_date(text: str, last_date: datetime) -> Optional[datetime]:
+    """
+    When a page's parsed date goes *backward* in a chronological notebook,
+    the month word was likely misread by OCR ("May" → "Nov") while the day
+    numeral is usually right. Re-anchor the day onto the running month (or
+    the next), keeping the result within [last_date, now].
+    """
+    first_line = text.strip().split("\n", 1)[0].strip()
+    m = _INLINE_DATE_RE.match(first_line)
+    if m is None:
+        return None
+    day = int(m.group(1))
+
+    candidates = [
+        (last_date.year, last_date.month),
+        (last_date.year + (last_date.month == 12), last_date.month % 12 + 1),
+    ]
+    for year, month in candidates:
+        try:
+            candidate = datetime(year, month, day)
+        except ValueError:
+            continue
+        if last_date <= candidate <= datetime.utcnow() + timedelta(days=1):
+            return candidate
+    return None
+
+
+def _is_blank_transcript(text: str) -> bool:
+    """True when the OCR output denotes an empty page rather than content —
+    the model sometimes narrates blankness instead of staying silent."""
+    t = text.strip().lower()
+    if not t or t == "[blank]":
+        return True
+    return len(t) < 80 and ("no text" in t or "blank" in t or "nothing to transcribe" in t)
+
+
+def _already_imported(session: Session, external_id: str, file_mtime: datetime) -> bool:
+    """True if this page was ingested after the file was last modified —
+    meaning the export is unchanged and re-OCR would be wasted spend."""
+    existing = session.exec(
+        select(JournalEntry).where(
+            JournalEntry.source == "goodnotes",
+            JournalEntry.external_id == external_id,
+        )
+    ).first()
+    return (
+        existing is not None
+        and existing.imported_at is not None
+        and existing.imported_at >= file_mtime
+    )
+
+
 async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
-    """Scan the iCloud GoodNotes folder and persist new entries (idempotent via content hash)."""
+    """
+    Scan the iCloud GoodNotes folder and ingest each PDF page (or image) as
+    its own journal entry, transcribed via Claude vision.
+
+    Page identity is "<filename>#p<N>" in external_id: re-exporting the same
+    file re-OCRs only when the file changed, edited pages update in place,
+    and unchanged pages dedupe by content hash. Entry dates come from
+    handwritten date headers (parse_inline_date), falling back to file mtime.
+    """
     raw_path = os.environ["GOODNOTES_ICLOUD_PATH"]
     folder = Path(os.path.expanduser(raw_path))
 
     if not folder.exists():
         logger.warning("GoodNotes iCloud path does not exist: %s", folder)
-        return {"ingested": 0, "skipped": 0}, []
+        return {"ingested": 0, "updated": 0, "skipped": 0}, []
 
-    texts: List[str] = []
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    raw_entries: List[RawEntry] = []
+    ocr_calls = 0
+
     for path in sorted(folder.rglob("*")):
-        if not path.is_file():
+        if not path.is_file() or path.name.startswith(".DS_Store"):
             continue
 
         resolved = await _ensure_local(path)
@@ -487,15 +569,56 @@ async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
             continue
 
         suffix = resolved.suffix.lower()
-        if suffix == ".pdf":
-            text = _extract_pdf_text(resolved)
-        elif suffix in _IMAGE_MEDIA_TYPES:
-            text = await _ocr_with_claude(resolved.read_bytes(), _IMAGE_MEDIA_TYPES[suffix])
-        else:
+        if suffix != ".pdf" and suffix not in _IMAGE_MEDIA_TYPES:
             continue
 
-        if text.strip():
-            texts.append(text)
+        file_mtime = datetime.fromtimestamp(
+            resolved.stat().st_mtime, tz=timezone.utc
+        ).replace(tzinfo=None)
 
-    logger.info("GoodNotes: extracted text from %d file(s) in %s", len(texts), folder)
-    return ingest_entries(texts, "goodnotes", session)
+        if suffix == ".pdf":
+            page_pdfs = _split_pdf_pages(resolved)
+            # Notebook pages are chronological: pages without a parseable
+            # date header inherit the date of the last dated page before them.
+            last_date: Optional[datetime] = None
+            for page_num, page_bytes in enumerate(page_pdfs, start=1):
+                external_id = f"{resolved.name}#p{page_num}"
+                if _already_imported(session, external_id, file_mtime):
+                    continue
+                text = await _ocr_with_claude(client, page_bytes, "application/pdf")
+                ocr_calls += 1
+                if _is_blank_transcript(text):
+                    continue
+                parsed = parse_inline_date(text, fallback=last_date or file_mtime)
+                # Notebooks move forward in time: a parsed date earlier than
+                # the running date is an OCR misread — rescue the day onto the
+                # running month, or inherit the running date.
+                if parsed is not None and last_date is not None and parsed < last_date:
+                    parsed = _rescue_regressed_date(text, last_date)
+                if parsed is not None:
+                    last_date = parsed
+                raw_entries.append(
+                    RawEntry(
+                        content=text,
+                        timestamp=parsed or last_date or file_mtime,
+                        external_id=external_id,
+                    )
+                )
+        else:
+            external_id = resolved.name
+            if _already_imported(session, external_id, file_mtime):
+                continue
+            text = await _ocr_with_claude(
+                client, resolved.read_bytes(), _IMAGE_MEDIA_TYPES[suffix]
+            )
+            ocr_calls += 1
+            if not _is_blank_transcript(text):
+                raw_entries.append(
+                    RawEntry(content=text, timestamp=file_mtime, external_id=external_id)
+                )
+
+    logger.info(
+        "GoodNotes: %d OCR call(s), %d page(s) with text in %s",
+        ocr_calls, len(raw_entries), folder,
+    )
+    return ingest_entries(raw_entries, "goodnotes", session)
