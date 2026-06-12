@@ -1,1 +1,76 @@
 @import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens — neo-brutalism × dopamine
+   - Palette sampled from mood_board/IMG_20260525_171509.jpg (graffiti piece),
+     sun-wash corrected. One accent per section keeps the boldness coherent:
+       rose  → mood/trends & identity   lilac → synthesis & primary actions
+       mint  → search & positive mood   gold  → warnings & mid mood
+       berry → stop, errors & negative mood
+   - Shadows: hard offsets, zero blur. Never soft/glowy.
+   - Radius: 2px everywhere. Spacing: 4px grid (steps 1/2/3/4/6/8 only).
+   - Type scale: 12 / 14 / 16 / 20 / 30 (xs / sm / base / xl / 3xl).
+--------------------------------------------------------------------------- */
+@theme {
+  --color-paper: #f4e4bf ;  /* sunlit sand*/
+  --color-ink: #211e1a; /* warm black of the outlines */
+  --color-rose: #f4699b; /* bubblegum letter fill */
+  --color-lilac: #8a74e8; /* periwinkle letter shadows */
+  --color-mint: #2cc59b; /* celadon outlines */
+  --color-gold: #e8a81c; /* olive-gold splotches */
+  --color-berry: #d92b63; /* raspberry accents */
+
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  --font-display: "Space Grotesk", "Inter", system-ui, sans-serif;
+
+  --shadow-brutal-sm: 3px 3px 0 0 var(--color-ink);
+  --shadow-brutal: 5px 5px 0 0 var(--color-ink);
+  --shadow-brutal-lg: 8px 8px 0 0 var(--color-ink);
+
+  --radius-brutal: 2px;
+}
+
+/* Chunky pressable control: hard shadow collapses as it "pushes in". */
+@utility btn-brutal {
+  border: 2px solid var(--color-ink);
+  border-radius: var(--radius-brutal);
+  box-shadow: var(--shadow-brutal-sm);
+  font-weight: 700;
+  transition:
+    translate 100ms ease,
+    box-shadow 100ms ease;
+
+  &:hover {
+    translate: 1px 1px;
+    box-shadow: 2px 2px 0 0 var(--color-ink);
+  }
+
+  &:active {
+    translate: 3px 3px;
+    box-shadow: none;
+  }
+
+  &:focus-visible {
+    outline: 2px dashed var(--color-ink);
+    outline-offset: 2px;
+  }
+}
+
+/* Section card: thick ink frame, hard offset, sharp corners. */
+@utility card-brutal {
+  background: white;
+  border: 2px solid var(--color-ink);
+  border-radius: var(--radius-brutal);
+  box-shadow: var(--shadow-brutal);
+}
+
+/* Rotated sticker label that sits on a card's top edge. */
+@utility sticker {
+  display: inline-block;
+  border: 2px solid var(--color-ink);
+  border-radius: var(--radius-brutal);
+  font-family: var(--font-display);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}

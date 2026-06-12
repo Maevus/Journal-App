@@ -1,0 +1,7 @@
+{
+  // Tailwind v4 CSS-first config: let Tailwind IntelliSense own .css files so
+  // @theme/@utility parse, tokens autocomplete, and color swatches/picker work.
+  "files.associations": {
+    "*.css": "tailwindcss"
+  }
+}

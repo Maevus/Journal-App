@@ -33,23 +33,17 @@ export function StreamingPanel({ range }: StreamingPanelProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xl font-semibold text-gray-900">
-          Journal Synthesis
-          <span className="ml-2 text-sm font-normal text-gray-400">
-            {range.label.toLowerCase()}
-          </span>
-        </h2>
+        <span className="font-display text-xl font-bold lowercase">
+          {range.label.toLowerCase()}
+        </span>
         {isStreaming ? (
-          <button
-            onClick={abort}
-            className="rounded bg-red-100 px-3 py-1.5 text-sm font-medium text-red-700 hover:bg-red-200 focus:outline-none focus:ring-2 focus:ring-red-400"
-          >
+          <button onClick={abort} className="btn-brutal bg-berry px-3 py-1 text-sm text-white">
             Stop generating
           </button>
         ) : (
           <button
             onClick={handleStart}
-            className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className="btn-brutal bg-lilac px-3 py-1 text-sm text-white"
           >
             {stale ? 'Regenerate' : 'Generate synthesis'}
           </button>
@@ -57,13 +51,19 @@ export function StreamingPanel({ range }: StreamingPanelProps) {
       </div>
 
       {error && (
-        <div className="mb-3 rounded-md bg-red-50 p-3 text-sm text-red-700" role="alert">
+        <div
+          className="mb-3 rounded-brutal border-2 border-ink bg-berry p-3 text-sm font-bold text-white"
+          role="alert"
+        >
           {error}
         </div>
       )}
 
       {stale && !isStreaming && (
-        <div className="mb-3 rounded-md bg-amber-50 p-3 text-sm text-amber-700" role="status">
+        <div
+          className="mb-3 rounded-brutal border-2 border-ink bg-gold p-3 text-sm font-medium"
+          role="status"
+        >
           This synthesis covers <strong>{generatedFor?.toLowerCase()}</strong> — regenerate to
           reflect {range.label.toLowerCase()}.
         </div>
@@ -74,14 +74,14 @@ export function StreamingPanel({ range }: StreamingPanelProps) {
       {text && (
         <div
           ref={scrollRef}
-          className="prose prose-sm max-h-[32rem] max-w-none flex-1 overflow-y-auto text-gray-800"
+          className="prose prose-sm max-h-[32rem] max-w-none flex-1 overflow-y-auto text-ink prose-headings:font-display"
         >
           <ReactMarkdown>{text}</ReactMarkdown>
         </div>
       )}
 
       {!text && !isStreaming && !error && (
-        <p className="text-sm text-gray-400">
+        <p className="text-sm font-medium text-ink/50">
           Click &ldquo;Generate synthesis&rdquo; to analyse your journal entries from{' '}
           {range.label === 'All time' ? 'all time' : `the last ${range.label.toLowerCase()}`}.
         </p>

@@ -37,16 +37,16 @@ export function MoodChart({ range }: MoodChartProps) {
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-xl font-semibold text-gray-900">
-          Mood Trends — {range.label.toLowerCase()}
-        </h2>
-        <label className="flex items-center gap-2 text-sm text-gray-500">
+        <span className="font-display text-xl font-bold lowercase">
+          {range.label.toLowerCase()}
+        </span>
+        <label className="flex items-center gap-2 text-sm font-medium text-ink/60">
           View a day
           <input
             type="date"
             value={selectedDate ?? ''}
             onChange={(e) => setSelectedDate(e.target.value || null)}
-            className="rounded-md border border-gray-200 px-2 py-1 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            className="rounded-brutal border-2 border-ink bg-white px-2 py-1 text-sm font-medium text-ink focus:outline-none focus-visible:outline-2 focus-visible:outline-dashed focus-visible:outline-ink"
           />
         </label>
       </div>
@@ -60,29 +60,39 @@ export function MoodChart({ range }: MoodChartProps) {
             if (label) setSelectedDate(label)
           }}
         >
-          <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+          {/* Hexes mirror the @theme tokens in index.css (recharts can't read CSS vars) */}
+          <CartesianGrid strokeDasharray="4 4" stroke="#e2d8c0" />
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            tick={{ fontSize: 11, fill: '#211e1a', opacity: 0.5 }}
+            stroke="#211e1a"
             tickFormatter={tickFormat}
           />
           <YAxis
             domain={[0, 1]}
-            tick={{ fontSize: 11, fill: '#9ca3af' }}
+            tick={{ fontSize: 11, fill: '#211e1a', opacity: 0.5 }}
+            stroke="#211e1a"
             tickFormatter={(v: number) => v.toFixed(1)}
           />
           <Tooltip
             formatter={(v: number) => [v.toFixed(3), 'Mood score']}
             labelFormatter={(label: string) => ddmmyyyy(label)}
-            labelStyle={{ fontSize: 12 }}
+            labelStyle={{ fontSize: 12, fontWeight: 700, color: '#211e1a' }}
+            contentStyle={{
+              border: '2px solid #211e1a',
+              borderRadius: 2,
+              boxShadow: '3px 3px 0 0 #211e1a',
+              fontSize: 12,
+            }}
           />
           <Line
             type="monotone"
             dataKey="score"
-            stroke="#6366f1"
-            strokeWidth={2}
+            stroke="#f4699b"
+            strokeWidth={3}
             dot={false}
-            activeDot={{ r: 4 }}
+            isAnimationActive={false}
+            activeDot={{ r: 5, fill: '#8a74e8', stroke: '#211e1a', strokeWidth: 2 }}
           />
         </LineChart>
       </ResponsiveContainer>

@@ -27,8 +27,6 @@ export function SearchPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      <h2 className="mb-4 text-xl font-semibold text-gray-900">Semantic Search</h2>
-
       <div className="mb-4 flex gap-2">
         <input
           type="text"
@@ -36,45 +34,47 @@ export function SearchPanel() {
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && void handleSearch()}
           placeholder="Search your journal…"
-          className="flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="flex-1 rounded-brutal border-2 border-ink bg-white px-3 py-2 text-sm font-medium placeholder:text-ink/40 focus:outline-none focus-visible:outline-2 focus-visible:outline-dashed focus-visible:outline-ink"
         />
         <button
           onClick={() => void handleSearch()}
           disabled={loading}
-          className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          className="btn-brutal bg-mint px-4 py-2 text-sm text-ink disabled:opacity-50"
         >
           {loading ? 'Searching…' : 'Search'}
         </button>
       </div>
 
-      {error && <p className="mb-2 text-sm text-red-500">{error}</p>}
+      {error && <p className="mb-2 text-sm font-bold text-berry">{error}</p>}
 
       {loading && <SkeletonLoader lines={3} />}
 
       {!loading && (
         <div className="flex-1 space-y-3 overflow-y-auto">
           {results.map((result) => (
-            <div key={result.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-              <div className="mb-1 flex items-center gap-3 text-xs text-gray-400">
-                <span className="font-medium uppercase tracking-wide">{result.source}</span>
-                <span>{new Date(result.timestamp).toLocaleDateString()}</span>
-                <span>score {result.similarity_score.toFixed(3)}</span>
+            <div key={result.id} className="rounded-brutal border-2 border-ink bg-paper p-3">
+              <div className="mb-1 flex items-center gap-3 text-xs text-ink/60">
+                <span className="font-bold uppercase tracking-wide">{result.source}</span>
+                <span className="font-medium">
+                  {new Date(result.timestamp).toLocaleDateString()}
+                </span>
+                <span className="font-medium">score {result.similarity_score.toFixed(3)}</span>
                 {sourceNoteUrl(result.source, result.external_id) && (
                   <a
                     href={sourceNoteUrl(result.source, result.external_id)!}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="ml-auto font-medium text-indigo-500 hover:text-indigo-700 hover:underline"
+                    className="ml-auto font-bold text-lilac underline decoration-2 underline-offset-2 hover:bg-lilac hover:text-white"
                   >
                     Open in Keep ↗
                   </a>
                 )}
               </div>
-              <p className="line-clamp-3 text-sm text-gray-700">{result.content}</p>
+              <p className="line-clamp-3 text-sm text-ink">{result.content}</p>
             </div>
           ))}
           {searched && results.length === 0 && !loading && (
-            <p className="text-sm text-gray-400">No results found.</p>
+            <p className="text-sm font-medium text-ink/50">No results found.</p>
           )}
         </div>
       )}

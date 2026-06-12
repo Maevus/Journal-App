@@ -10,29 +10,51 @@ function App() {
   const [range, setRange] = useState(TIME_RANGES[0])
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="border-b border-gray-200 bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+    <div className="min-h-screen bg-paper font-sans text-ink">
+      <header className="border-b-4 border-ink bg-white px-6 py-4">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-end justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Journal Analytics</h1>
-            <p className="text-sm text-gray-500">Patterns from your personal journal</p>
+            <h1 className="font-display text-3xl font-bold uppercase tracking-tight">
+              Journal{' '}
+              <span className="inline-block -rotate-1 bg-rose px-2">Analytics</span>
+            </h1>
+            <p className="mt-1 text-sm font-medium text-ink/60">
+              Patterns from your personal journal
+            </p>
           </div>
           <TimeRangeSelector value={range} onChange={setRange} />
         </div>
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-8">
-        <div className="mb-8 rounded-xl bg-white p-6 shadow-sm">
-          <MoodChart range={range} />
-        </div>
+        {/* Full-bleed trends section, sticker label overlapping the frame */}
+        <section className="relative mb-8">
+          <span className="sticker absolute -top-3 left-6 z-10 -rotate-1 bg-rose px-3 py-1 text-xs">
+            Mood trends
+          </span>
+          <div className="card-brutal p-6 pt-8">
+            <MoodChart range={range} />
+          </div>
+        </section>
 
-        <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
-          <div className="rounded-xl bg-white p-6 shadow-sm">
-            <StreamingPanel range={range} />
-          </div>
-          <div className="rounded-xl bg-white p-6 shadow-sm">
-            <SearchPanel />
-          </div>
+        {/* Intentionally asymmetric: synthesis carries more visual weight */}
+        <div className="grid grid-cols-1 gap-8 lg:grid-cols-5">
+          <section className="relative lg:col-span-3">
+            <span className="sticker absolute -top-3 left-6 z-10 rotate-1 bg-lilac px-3 py-1 text-xs text-white">
+              Synthesis
+            </span>
+            <div className="card-brutal h-full p-6 pt-8">
+              <StreamingPanel range={range} />
+            </div>
+          </section>
+          <section className="relative lg:col-span-2">
+            <span className="sticker absolute -top-3 left-6 z-10 -rotate-1 bg-mint px-3 py-1 text-xs">
+              Search
+            </span>
+            <div className="card-brutal h-full p-6 pt-8">
+              <SearchPanel />
+            </div>
+          </section>
         </div>
       </main>
     </div>

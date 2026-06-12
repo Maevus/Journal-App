@@ -18,20 +18,16 @@ interface TimeRangeSelectorProps {
 
 export function TimeRangeSelector({ value, onChange }: TimeRangeSelectorProps) {
   return (
-    <div
-      role="group"
-      aria-label="Time period"
-      className="inline-flex rounded-lg border border-gray-200 bg-gray-100 p-0.5"
-    >
+    <div role="group" aria-label="Time period" className="inline-flex gap-2">
       {TIME_RANGES.map((range) => (
         <button
           key={range.label}
           onClick={() => onChange(range)}
           aria-pressed={range.days === value.days}
-          className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400 ${
+          className={`btn-brutal px-3 py-1 text-sm ${
             range.days === value.days
-              ? 'bg-white text-indigo-700 shadow-sm'
-              : 'text-gray-500 hover:text-gray-800'
+              ? 'bg-rose text-ink'
+              : 'bg-white text-ink/60 hover:text-ink'
           }`}
         >
           {range.label}

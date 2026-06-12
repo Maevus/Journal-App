@@ -8,7 +8,7 @@ export function SkeletonLoader({ lines = 4 }: Props) {
       {Array.from({ length: lines }).map((_, i) => (
         <div
           key={i}
-          className={`h-4 rounded bg-gray-200 ${i === lines - 1 ? 'w-3/4' : 'w-full'}`}
+          className={`h-4 rounded-brutal bg-ink/10 ${i === lines - 1 ? 'w-3/4' : 'w-full'}`}
         />
       ))}
       <span className="sr-only">Loading…</span>
