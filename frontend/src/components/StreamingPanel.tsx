@@ -3,16 +3,21 @@ import ReactMarkdown from 'react-markdown'
 import { synthesisUrl } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { SkeletonLoader } from './SkeletonLoader'
+import type { SourceFilter } from './SourceSelector'
 import type { TimeRange } from './TimeRangeSelector'
 
 interface StreamingPanelProps {
   range: TimeRange
+  source: SourceFilter
 }
 
-export function StreamingPanel({ range }: StreamingPanelProps) {
-  const { text, error, isStreaming, start, abort } = useSSE(synthesisUrl(20, range.days))
-  // Which period the visible text was generated for — synthesis costs an LLM
-  // call, so changing the period flags the text as stale instead of auto-rerunning.
+export function StreamingPanel({ range, source }: StreamingPanelProps) {
+  const { text, error, isStreaming, start, abort } = useSSE(
+    synthesisUrl(20, range.days, source.value),
+  )
+  const scopeLabel = source.value ? `${range.label} · ${source.label}` : range.label
+  // Which period/source the visible text was generated for — synthesis costs an
+  // LLM call, so changing the scope flags the text as stale instead of auto-rerunning.
   const [generatedFor, setGeneratedFor] = useState<string | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
 
@@ -24,17 +29,17 @@ export function StreamingPanel({ range }: StreamingPanelProps) {
   }, [text, isStreaming])
 
   const handleStart = () => {
-    setGeneratedFor(range.label)
+    setGeneratedFor(scopeLabel)
     start()
   }
 
-  const stale = text !== '' && generatedFor !== null && generatedFor !== range.label
+  const stale = text !== '' && generatedFor !== null && generatedFor !== scopeLabel
 
   return (
     <div className="flex h-full flex-col">
       <div className="mb-4 flex items-center justify-between">
         <span className="font-display text-xl font-bold lowercase">
-          {range.label.toLowerCase()}
+          {scopeLabel.toLowerCase()}
         </span>
         {isStreaming ? (
           <button onClick={abort} className="btn-brutal bg-berry px-3 py-1 text-sm text-white">
@@ -65,7 +70,7 @@ export function StreamingPanel({ range }: StreamingPanelProps) {
           role="status"
         >
           This synthesis covers <strong>{generatedFor?.toLowerCase()}</strong> — regenerate to
-          reflect {range.label.toLowerCase()}.
+          reflect {scopeLabel.toLowerCase()}.
         </div>
       )}
 

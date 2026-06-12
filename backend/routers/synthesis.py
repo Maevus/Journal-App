@@ -26,12 +26,15 @@ def _load_prompt() -> dict:
 async def synthesis(
     limit: int = 20,
     days: int = 0,  # calendar window; 0 = all time
+    source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
 ):
     query = select(JournalEntry).order_by(JournalEntry.timestamp.asc())
     if days > 0:
         cutoff = datetime.utcnow() - timedelta(days=days)
         query = query.where(JournalEntry.timestamp >= cutoff)
+    if source:
+        query = query.where(JournalEntry.source == source)
     entries = list(session.exec(query).all())
 
     # Sample evenly across the window so long ranges reflect the whole period

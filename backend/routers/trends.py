@@ -12,6 +12,7 @@ router = APIRouter()
 @router.get("")
 async def get_trends(
     days: int = 30,  # calendar window; 0 = all time
+    source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
 ):
     query = (
@@ -22,6 +23,8 @@ async def get_trends(
     if days > 0:
         cutoff = datetime.utcnow() - timedelta(days=days)
         query = query.where(JournalEntry.timestamp >= cutoff)
+    if source:
+        query = query.where(JournalEntry.source == source)
     entries = session.exec(query).all()
 
     daily: defaultdict[str, list[float]] = defaultdict(list)
@@ -33,8 +36,9 @@ async def get_trends(
         for date, scores in sorted(daily.items())
     ]
 
-    # Return stub data when no scored entries exist yet
-    if not trends:
+    # Return stub data when no scored entries exist yet. Skipped when a source
+    # filter is set — an empty chart is honest there, a fake sinusoid is not.
+    if not trends and source is None:
         stub_days = days or 30
         today = datetime.utcnow().date()
         import random, math  # noqa: E401

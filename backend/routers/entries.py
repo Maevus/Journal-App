@@ -12,17 +12,21 @@ router = APIRouter()
 @router.get("")
 async def get_entries(
     date: date_type,
+    source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
 ):
     """Return all journal entries written on a specific calendar day (UTC)."""
     start = datetime.combine(date, time.min)
     end = start + timedelta(days=1)
 
-    entries = session.exec(
+    query = (
         select(JournalEntry)
         .where(JournalEntry.timestamp >= start, JournalEntry.timestamp < end)
         .order_by(JournalEntry.timestamp.asc())
-    ).all()
+    )
+    if source:
+        query = query.where(JournalEntry.source == source)
+    entries = session.exec(query).all()
 
     return {
         "entries": [

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { fetchEntriesByDate, sourceNoteUrl, type DayEntry } from '../api/client'
 import { SkeletonLoader } from './SkeletonLoader'
+import type { SourceFilter } from './SourceSelector'
 
 const ddmmyyyy = (iso: string) => `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}`
 
@@ -12,10 +13,11 @@ function moodColor(score: number): string {
 
 interface DayDetailProps {
   date: string // ISO "YYYY-MM-DD"
+  source: SourceFilter
   onClose: () => void
 }
 
-export function DayDetail({ date, onClose }: DayDetailProps) {
+export function DayDetail({ date, source, onClose }: DayDetailProps) {
   const [entries, setEntries] = useState<DayEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -24,7 +26,7 @@ export function DayDetail({ date, onClose }: DayDetailProps) {
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetchEntriesByDate(date)
+    fetchEntriesByDate(date, source.value)
       .then((result) => {
         if (!cancelled) setEntries(result)
       })
@@ -37,7 +39,7 @@ export function DayDetail({ date, onClose }: DayDetailProps) {
     return () => {
       cancelled = true
     }
-  }, [date])
+  }, [date, source.value])
 
   return (
     <div className="mt-6 rounded-brutal border-2 border-ink bg-paper p-4">

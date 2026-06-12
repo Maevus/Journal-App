@@ -58,23 +58,32 @@ export async function searchEntries(
   return res.json() as Promise<{ results: SearchResult[] }>
 }
 
-export async function fetchTrends(days = 30): Promise<TrendPoint[]> {
-  // days=0 → all time
-  const res = await fetch(`${BASE_URL}/trends?days=${days}`)
+export async function fetchTrends(days = 30, source: string | null = null): Promise<TrendPoint[]> {
+  // days=0 → all time; source=null → all sources
+  const params = new URLSearchParams({ days: String(days) })
+  if (source) params.set('source', source)
+  const res = await fetch(`${BASE_URL}/trends?${params}`)
   if (!res.ok) throw new Error(`Trends failed: ${res.statusText}`)
   const data = (await res.json()) as { trends: TrendPoint[] }
   return data.trends
 }
 
-export async function fetchEntriesByDate(date: string): Promise<DayEntry[]> {
-  // date: ISO "YYYY-MM-DD"
-  const res = await fetch(`${BASE_URL}/entries?date=${date}`)
+export async function fetchEntriesByDate(
+  date: string,
+  source: string | null = null,
+): Promise<DayEntry[]> {
+  // date: ISO "YYYY-MM-DD"; source=null → all sources
+  const params = new URLSearchParams({ date })
+  if (source) params.set('source', source)
+  const res = await fetch(`${BASE_URL}/entries?${params}`)
   if (!res.ok) throw new Error(`Entries failed: ${res.statusText}`)
   const data = (await res.json()) as { entries: DayEntry[] }
   return data.entries
 }
 
-export function synthesisUrl(limit = 20, days = 0): string {
-  // days=0 → all time
-  return `${BASE_URL}/stream/synthesis?limit=${limit}&days=${days}`
+export function synthesisUrl(limit = 20, days = 0, source: string | null = null): string {
+  // days=0 → all time; source=null → all sources
+  const params = new URLSearchParams({ limit: String(limit), days: String(days) })
+  if (source) params.set('source', source)
+  return `${BASE_URL}/stream/synthesis?${params}`
 }

@@ -3,11 +3,14 @@ import './App.css'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
 import { StreamingPanel } from './components/StreamingPanel'
+import { SOURCE_FILTERS, SourceSelector } from './components/SourceSelector'
 import { TIME_RANGES, TimeRangeSelector } from './components/TimeRangeSelector'
 
 function App() {
-  // One time period drives both the mood chart and the synthesis panel.
+  // One time period + source filter drives the mood chart, day drill-down,
+  // and the synthesis panel.
   const [range, setRange] = useState(TIME_RANGES[0])
+  const [source, setSource] = useState(SOURCE_FILTERS[0])
 
   return (
     <div className="min-h-screen bg-paper font-sans text-ink">
@@ -22,7 +25,10 @@ function App() {
               Patterns from your personal journal
             </p>
           </div>
-          <TimeRangeSelector value={range} onChange={setRange} />
+          <div className="flex flex-col items-end gap-2">
+            <TimeRangeSelector value={range} onChange={setRange} />
+            <SourceSelector value={source} onChange={setSource} />
+          </div>
         </div>
       </header>
 
@@ -33,7 +39,7 @@ function App() {
             Mood trends
           </span>
           <div className="card-brutal p-6 pt-8">
-            <MoodChart range={range} />
+            <MoodChart range={range} source={source} />
           </div>
         </section>
 
@@ -44,7 +50,7 @@ function App() {
               Synthesis
             </span>
             <div className="card-brutal h-full p-6 pt-8">
-              <StreamingPanel range={range} />
+              <StreamingPanel range={range} source={source} />
             </div>
           </section>
           <section className="relative lg:col-span-2">
