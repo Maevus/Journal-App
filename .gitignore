@@ -19,3 +19,7 @@ docs/handoffs/
 
 # Design reference photos (local-only; palette derived in frontend/src/index.css)
 mood_board/
+
+# Demo data (rebuild with backend/scripts/seed_demo.py)
+backend/demo_journal.db
+backend/demo_chroma_db/

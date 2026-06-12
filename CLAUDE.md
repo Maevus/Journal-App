@@ -49,6 +49,8 @@ SSE format: each token is JSON-encoded (`json.dumps(token)`) so newlines survive
 
 Mood scoring is a FastAPI `BackgroundTask` — it fires after ingest returns and calls `services/llm_client.py:structured_output`. Failures are silently swallowed.
 
+**Demo mode**: `python scripts/seed_demo.py` builds a self-contained showcase DB (`demo_journal.db` + `demo_chroma_db/`, both gitignored) with ~65 crafted entries across all three sources and a deliberate mood arc. Serve it without touching the real journal via `DATABASE_URL=sqlite:///./demo_journal.db CHROMA_PERSIST_DIR=./demo_chroma_db SYNC_ON_STARTUP=0 uvicorn main:app`.
+
 ## Frontend
 
 ```bash
