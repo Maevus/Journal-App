@@ -16,3 +16,6 @@ backend/chroma_db.bak-*
 
 # Handoff docs (local-only, persistent across reboot)
 docs/handoffs/
+
+# Design reference photos (local-only; palette derived in frontend/src/index.css)
+mood_board/
