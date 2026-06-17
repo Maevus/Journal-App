@@ -37,6 +37,7 @@ async def get_entries(
                 "timestamp": e.timestamp.isoformat(),
                 "imported_at": e.imported_at.isoformat() if e.imported_at else None,
                 "mood_score": e.mood_score,
+                "mood_reasoning": e.mood_reasoning,
                 "external_id": e.external_id,
             }
             for e in entries

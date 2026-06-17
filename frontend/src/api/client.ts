@@ -29,6 +29,7 @@ export interface DayEntry {
   timestamp: string
   imported_at: string | null
   mood_score: number | null
+  mood_reasoning: string | null
   external_id: string | null
 }
 

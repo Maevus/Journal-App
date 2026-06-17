@@ -57,6 +57,7 @@ async def lifespan(app: FastAPI):
         flush=True,
     )
     SQLModel.metadata.create_all(engine)
+    models.journal.ensure_schema()  # add columns missing from a pre-existing DB
     # Fire-and-forget so the server is usable immediately; new notes fold in
     # moments later rather than blocking boot on a full Keep sync.
     sync_task = asyncio.create_task(_startup_keep_sync()) if _sync_on_startup_enabled() else None

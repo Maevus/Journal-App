@@ -248,6 +248,20 @@ DEMO_ENTRIES: list[tuple[int, int, str, float, str]] = [
 ]
 
 
+def _demo_reasoning(mood: float) -> str:
+    """Canned, score-band reasoning so demo entries have hover text without an
+    LLM call (real entries get a per-entry reasoning from the scorer)."""
+    if mood >= 0.7:
+        return "Upbeat and energised — clear positive momentum and a sense of things going well."
+    if mood >= 0.55:
+        return "Generally positive with a steady, content tone; small wins outweigh the friction."
+    if mood >= 0.4:
+        return "Mixed and in-between — some progress, some strain, no strong pull either way."
+    if mood >= 0.25:
+        return "Low and effortful; signs of stress, fatigue, or things feeling stuck."
+    return "Heavy and depleted — a clearly difficult, low-energy stretch."
+
+
 def main() -> None:
     db_path = Path(DEMO_DB)
     if db_path.exists():
@@ -281,6 +295,7 @@ def main() -> None:
                 content=content,
                 timestamp=timestamp,
                 mood_score=mood,
+                mood_reasoning=_demo_reasoning(mood),
                 content_hash=compute_hash(content),
                 external_id=external_id,
                 imported_at=now,

@@ -182,6 +182,7 @@ def ingest_entries(
                 if authored_at is not None:
                     prior.timestamp = authored_at
                 prior.mood_score = None  # stale for the new text; re-scored below
+                prior.mood_reasoning = None
                 session.add(prior)
                 session.commit()
                 session.refresh(prior)
@@ -275,6 +276,7 @@ async def score_mood_background(entry_id: int, content: str) -> None:
             entry = session.get(JournalEntry, entry_id)
             if entry:
                 entry.mood_score = max(0.0, min(1.0, result.score))
+                entry.mood_reasoning = result.reasoning
                 session.commit()
 
     except Exception as exc:  # noqa: BLE001

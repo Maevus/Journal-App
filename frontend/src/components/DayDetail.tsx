@@ -90,6 +90,11 @@ export function DayDetail({ date, source, onClose }: DayDetailProps) {
                 )}
               </div>
               <p className="whitespace-pre-wrap text-sm text-ink">{entry.content}</p>
+              {entry.mood_reasoning && (
+                <p className="mt-2 border-t-2 border-dashed border-ink/20 pt-2 text-xs italic text-ink/60">
+                  Mood read: {entry.mood_reasoning}
+                </p>
+              )}
             </li>
           ))}
         </ul>
