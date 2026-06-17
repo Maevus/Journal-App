@@ -1,5 +1,12 @@
 # Architecture decisions
 
+## Mood reasoning stored per entry (2026-06-17)
+
+- **`JournalEntry` schema unfrozen, deliberately** — added a `mood_reasoning` column. This is normally a stop condition ("schema is frozen — stop and ask"); the user explicitly approved it for this feature after being shown the implications. The scorer already generated a reasoning sentence (`_MoodScore.reasoning`) and discarded it; now it's persisted.
+- **Idempotent SQLite migration via `ensure_schema()`** (`models/journal.py`) instead of a migration framework — `SQLModel.create_all` never ALTERs existing tables, so columns added later won't appear in a DB seeded earlier. `ensure_schema()` does `PRAGMA table_info` + `ALTER TABLE … ADD COLUMN` if missing; called in `main.py` lifespan after `create_all`. This is the pattern for future additive columns on SQLite (no Alembic).
+- **Reasoning surfaced in DayDetail (click-through), not the chart tooltip** — mood-chart points are daily *averages* (multiple entries per day), so a per-point tooltip can't map to one reasoning. DayDetail already lists per-entry, so it's the natural home.
+- **Backfill by re-scoring, not migration** — existing entries had no stored reasoning, so `scripts/backfill_mood_reasoning.py` re-scores any entry with `mood_reasoning IS NULL` (one LLM call each; resumable, per-entry commits). Demo gets canned score-band reasoning in the seeder (no LLM spend).
+
 ## Synthesis response caching + model refresh (2026-06-17)
 
 - **In-memory synthesis cache keyed on the rendered prompt** (`routers/synthesis.py`) — identical requests reuse the generated text instead of spending another LLM call. The key is `sha256(version + model + max_tokens + system + user_prompt)`; since `user_prompt` embeds the selected entries, range, and source, any entry edit/add or param change produces a different key and regenerates automatically. Bounded LRU (`_CACHE_MAX=32`), resets on restart — no schema/migration/dep (clears the stop conditions). First-of-todo-list item; verified the 2nd identical request makes no LLM call.
