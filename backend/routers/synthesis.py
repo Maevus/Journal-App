@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -64,7 +64,10 @@ async def synthesis(
 ):
     query = select(JournalEntry).order_by(JournalEntry.timestamp.asc())
     if days > 0:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        # naive UTC (tzinfo stripped) to match JournalEntry.timestamp, which is
+        # stored naive; an aware datetime would break the >= comparison
+        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+        cutoff = now_utc - timedelta(days=days)
         query = query.where(JournalEntry.timestamp >= cutoff)
     if source:
         query = query.where(JournalEntry.source == source)
@@ -80,9 +83,12 @@ async def synthesis(
 
     if entries:
         period = f"the last {days} days" if days > 0 else "all time"
-        entries_text = f"(Entries spanning {period}, in chronological order.)\n\n" + "\n---\n".join(
-            f"[{e.timestamp.date()} | source: {e.source}]\n{e.content}"
-            for e in entries
+        entries_text = (
+            f"(Entries spanning {period}, in chronological order.)\n\n"
+            + "\n---\n".join(
+                f"[{e.timestamp.date()} | source: {e.source}]\n{e.content}"
+                for e in entries
+            )
         )
     else:
         entries_text = "No journal entries found yet."
