@@ -1,5 +1,20 @@
 # Architecture decisions
 
+## Single APP_MODE switch for demo/real (2026-06-17)
+
+- **One `APP_MODE` env var derives the whole data stack** (`backend/config.py`) — `demo` → `demo_journal.db` + `demo_chroma_db` + Keep sync off; `real` (default) → `journal.db` + `chroma_db` + sync on. Replaces having to set `DATABASE_URL` + `CHROMA_PERSIST_DIR` + `SYNC_ON_STARTUP` together, where forgetting `SYNC_ON_STARTUP=0` would pull real Keep notes into the demo DB. Supersedes the three-var recipe in the 2026-06-12 notes below.
+- **`config.py` is the single source of truth** — `models/journal.py` and `services/embeddings.py` import `DATABASE_URL` / `CHROMA_PERSIST_DIR` from it instead of reading env directly; `main.py` reads `config.SYNC_ON_STARTUP`. Unknown `APP_MODE` values raise at import (typos fail loud rather than silently serving real data).
+- **Individual vars still override** — explicit `DATABASE_URL` etc. win over the mode default, so any combination is reachable. **But `.env` must NOT pin those three** — `load_dotenv` makes them look explicit and silently neutralises `APP_MODE`. Removed them from `.env` (the real values were just the `APP_MODE=real` defaults anyway).
+- **Startup banner via `print`, not `logger.info`** — the default uvicorn logging config swallows app-module `INFO`, so the "which DB am I serving" safety line is a plain `print` to stdout.
+
+## Source filtering + demo data (2026-06-12)
+
+- **Source filter lives at the analytics level, not search** — one App-level `source` state (like `range`) drives MoodChart, DayDetail, and synthesis via an optional `source` query param on `/trends`, `/entries`, `/stream/synthesis`. A search-panel filter was started and deliberately reverted.
+- **Trends stub suppressed when a source filter is active** — a fake sinusoid for "GoodNotes only" would be misleading; an empty chart with a message is honest. Stub still appears for the unfiltered empty-DB case.
+- **Synthesis staleness key includes source** — changing source (or range) flags the visible text stale rather than auto-regenerating, since synthesis costs an LLM call.
+- **Demo data is a separate database, not rows in the real one** — `scripts/seed_demo.py` builds `demo_journal.db` + `demo_chroma_db/` (gitignored); the app is pointed at them via `DATABASE_URL` / `CHROMA_PERSIST_DIR`. Mood scores are hand-set (no LLM spend); timestamps are relative to seed time so demos stay fresh.
+- **`SYNC_ON_STARTUP=0` required when serving the demo DB** — otherwise the startup Keep sync ingests real notes into it.
+
 - Web app not mobile — capture handled by Keep/GoodNotes, dashboard is review-only
 - Single user first, multi-user later
 - SQLite for now, Postgres when going public

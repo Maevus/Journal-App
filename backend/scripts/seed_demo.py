@@ -15,12 +15,10 @@ Usage (from backend/):
 
     .venv/bin/python scripts/seed_demo.py     # rebuilds demo db from scratch
 
-    DATABASE_URL=sqlite:///./demo_journal.db \
-    CHROMA_PERSIST_DIR=./demo_chroma_db \
-    SYNC_ON_STARTUP=0 \
-    uvicorn main:app
+    APP_MODE=demo uvicorn main:app            # serve the demo stack
 
-(SYNC_ON_STARTUP=0 keeps real Keep notes from syncing into the demo db.)
+APP_MODE=demo derives the demo db + chroma dir and turns Keep sync off in one
+switch, so real Keep notes can never sync into the demo db. See backend/config.py.
 """
 import os
 import shutil
@@ -35,9 +33,10 @@ sys.path.insert(0, str(BACKEND_DIR))
 DEMO_DB = "demo_journal.db"
 DEMO_CHROMA = "demo_chroma_db"
 
-# Must be set before importing models/services — both read env at import time
-os.environ["DATABASE_URL"] = f"sqlite:///./{DEMO_DB}"
-os.environ["CHROMA_PERSIST_DIR"] = f"./{DEMO_CHROMA}"
+# Must be set before importing models/services — config reads env at import time.
+# APP_MODE=demo derives the demo db + chroma dir (and sync-off) in one switch;
+# DEMO_DB / DEMO_CHROMA above mirror those derived paths for the wipe below.
+os.environ["APP_MODE"] = "demo"
 
 from sqlmodel import Session, SQLModel  # noqa: E402
 
@@ -297,12 +296,7 @@ def main() -> None:
     for source, n in sorted(counts.items()):
         print(f"  {source:12s} {n}")
     print(f"Embeddings stored in {DEMO_CHROMA}/")
-    print(
-        "\nRun the demo backend with:\n"
-        f"  DATABASE_URL=sqlite:///./{DEMO_DB} "
-        f"CHROMA_PERSIST_DIR=./{DEMO_CHROMA} "
-        "SYNC_ON_STARTUP=0 uvicorn main:app"
-    )
+    print("\nRun the demo backend with:\n  APP_MODE=demo uvicorn main:app")
 
 
 if __name__ == "__main__":

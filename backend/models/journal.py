@@ -1,10 +1,10 @@
-import os
 from datetime import datetime
 from typing import Generator, Optional
 
 from sqlmodel import Field, Session, SQLModel, create_engine
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./journal.db")
+from config import DATABASE_URL
+
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 

@@ -3,15 +3,15 @@ Chroma vector store: embed entries and run similarity search.
 Uses chromadb's built-in ONNX embedding function (no extra deps needed).
 """
 import logging
-import os
 from typing import List, Tuple
 
 import chromadb
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
+from config import CHROMA_PERSIST_DIR
+
 logger = logging.getLogger(__name__)
 
-CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 COLLECTION_NAME = "journal_entries"
 
 _collection = None

@@ -49,7 +49,9 @@ SSE format: each token is JSON-encoded (`json.dumps(token)`) so newlines survive
 
 Mood scoring is a FastAPI `BackgroundTask` — it fires after ingest returns and calls `services/llm_client.py:structured_output`. Failures are silently swallowed.
 
-**Demo mode**: `python scripts/seed_demo.py` builds a self-contained showcase DB (`demo_journal.db` + `demo_chroma_db/`, both gitignored) with ~65 crafted entries across all three sources and a deliberate mood arc. Serve it without touching the real journal via `DATABASE_URL=sqlite:///./demo_journal.db CHROMA_PERSIST_DIR=./demo_chroma_db SYNC_ON_STARTUP=0 uvicorn main:app`.
+**Demo mode**: `python scripts/seed_demo.py` builds a self-contained showcase DB (`demo_journal.db` + `demo_chroma_db/`, both gitignored) with ~65 crafted entries across all three sources and a deliberate mood arc. Serve it without touching the real journal via `APP_MODE=demo uvicorn main:app`. The single `APP_MODE` switch (`backend/config.py`) derives the demo db, Chroma dir, and Keep-sync-off together, so the demo can't accidentally ingest real Keep notes; `DATABASE_URL` / `CHROMA_PERSIST_DIR` / `SYNC_ON_STARTUP` still override individual pieces. **Don't re-pin those three in `.env`** — that silently neutralises `APP_MODE=demo`.
+
+**Restarting both servers**: `scripts/dev.sh {demo|real}` (re-runnable; kills the ports first, then starts backend :8000 + frontend :5173). `scripts/dev.sh demo --api-only` skips Vite; `scripts/dev.sh stop` kills both. Logs go to `/tmp/journal-{backend,frontend}.log`.
 
 ## Frontend
 

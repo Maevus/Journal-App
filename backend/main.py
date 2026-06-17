@@ -10,6 +10,9 @@ from sqlmodel import Session, SQLModel
 
 load_dotenv()
 
+# Import after load_dotenv so APP_MODE / DB paths reflect .env, not just the shell.
+import config  # noqa: E402
+
 # Import models so SQLModel registers their tables before create_all
 import models.journal  # noqa: F401, E402
 from models.journal import engine
@@ -19,9 +22,10 @@ logger = logging.getLogger(__name__)
 
 
 def _sync_on_startup_enabled() -> bool:
-    """Sync Keep when the app opens, unless explicitly disabled. Off is useful
-    under `uvicorn --reload`, which restarts (and would re-sync) on every save."""
-    if os.getenv("SYNC_ON_STARTUP", "1").lower() in ("0", "false", "no"):
+    """Sync Keep when the app opens, unless disabled. Off is useful under
+    `uvicorn --reload` (restarts re-sync on every save) and is the default in
+    demo mode so real notes never leak into the demo DB."""
+    if not config.SYNC_ON_STARTUP:
         return False
     return bool(os.getenv("GOOGLE_EMAIL"))  # no creds → nothing to sync
 
@@ -44,6 +48,14 @@ async def _startup_keep_sync() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Plain print (not logger.info, which the default uvicorn config swallows):
+    # this is a launch banner so the operator can see at a glance which DB is live.
+    # flush=True so it appears immediately even when stdout is redirected to a file.
+    print(
+        f"APP_MODE={config.APP_MODE} → db={config.DATABASE_URL} "
+        f"chroma={config.CHROMA_PERSIST_DIR} sync={config.SYNC_ON_STARTUP}",
+        flush=True,
+    )
     SQLModel.metadata.create_all(engine)
     # Fire-and-forget so the server is usable immediately; new notes fold in
     # moments later rather than blocking boot on a full Keep sync.
