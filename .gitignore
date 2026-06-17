@@ -13,6 +13,7 @@ backend/journal.db
 backend/chroma_db/
 backend/journal.db.bak-*
 backend/chroma_db.bak-*
+todo.md
 
 # Handoff docs (local-only, persistent across reboot)
 docs/handoffs/
