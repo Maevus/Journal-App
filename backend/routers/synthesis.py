@@ -1,4 +1,7 @@
+import hashlib
 import json
+import logging
+from collections import OrderedDict
 from datetime import datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
@@ -9,17 +12,47 @@ from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
 from models.journal import JournalEntry, get_session
-from services.llm_client import stream_text
+from services.llm_client import DEFAULT_MODEL, stream_text
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "synthesis_v1.yaml"
+
+# In-memory synthesis cache: an identical request reuses the generated text
+# instead of spending another LLM call. The key is the fully-rendered prompt,
+# which embeds the selected entries, range, and source — so any entry edit/add
+# or parameter change produces a different key and regenerates. Resets on
+# restart; bounded (LRU) so it can't grow without limit.
+_CACHE: "OrderedDict[str, str]" = OrderedDict()
+_CACHE_MAX = 32
 
 
 @lru_cache(maxsize=1)
 def _load_prompt() -> dict:
     with open(_PROMPT_PATH) as fh:
         return yaml.safe_load(fh)
+
+
+def _cache_key(model: str, max_tokens: int, system: str, user_prompt: str) -> str:
+    version = _load_prompt().get("version", "?")
+    raw = "\x00".join([str(version), model, str(max_tokens), system, user_prompt])
+    return hashlib.sha256(raw.encode()).hexdigest()
+
+
+def _cache_get(key: str) -> str | None:
+    text = _CACHE.get(key)
+    if text is not None:
+        _CACHE.move_to_end(key)  # mark most-recently-used
+    return text
+
+
+def _cache_put(key: str, text: str) -> None:
+    _CACHE[key] = text
+    _CACHE.move_to_end(key)
+    while len(_CACHE) > _CACHE_MAX:
+        _CACHE.popitem(last=False)  # evict least-recently-used
 
 
 @router.get("/synthesis")
@@ -55,16 +88,31 @@ async def synthesis(
         entries_text = "No journal entries found yet."
 
     user_prompt = cfg["user_template"].format(entries=entries_text)
+    model = cfg.get("model", DEFAULT_MODEL)
+    max_tokens = cfg.get("max_tokens", 1024)
+    key = _cache_key(model, max_tokens, cfg["system"], user_prompt)
 
     async def event_stream():
+        cached = _cache_get(key)
+        if cached is not None:
+            logger.info("synthesis cache hit %s — no LLM call", key[:8])
+            yield f"data: {json.dumps(cached)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        # Miss: stream from the LLM, accumulating tokens. Only cache once the
+        # stream completes — a mid-stream failure propagates and stores nothing.
+        chunks: list[str] = []
         async for token in stream_text(
             prompt=user_prompt,
             system=cfg["system"],
-            model=cfg.get("model", "claude-opus-4-5"),
-            max_tokens=cfg.get("max_tokens", 1024),
+            model=model,
+            max_tokens=max_tokens,
         ):
+            chunks.append(token)
             # JSON-encode each token so newlines in the payload are safe in SSE
             yield f"data: {json.dumps(token)}\n\n"
+        _cache_put(key, "".join(chunks))
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(

@@ -11,12 +11,12 @@ Full-stack personal journal analytics app: React SPA + FastAPI backend.
   main.py                   — lifespan app, CORS, router mounting
   models/journal.py         — SQLModel schema: JournalEntry + engine + get_session
   services/
-    llm_client.py           — Anthropic wrapper: async streaming, structured output, retry, cost logging
+    llm_client.py           — Anthropic wrapper: async streaming, structured output, retry, cost logging. DEFAULT_MODEL = claude-opus-4-8 ($5/$25 per 1M); model + pricing become per-user config once users bring their own key
     embeddings.py           — Chroma vector store: embed_and_store, search_similar
     ingestion.py            — Hash-deduplicated ingest + background mood scoring
   routers/
     ingest.py               — POST /ingest
-    synthesis.py            — GET /stream/synthesis  (SSE)
+    synthesis.py            — GET /stream/synthesis  (SSE); in-memory LRU cache keyed on the rendered prompt, so identical requests skip the LLM call
     search.py               — POST /search  (hybrid BM25 + Chroma)
     trends.py               — GET /trends
   prompts/synthesis_v1.yaml — Versioned system + user prompt template

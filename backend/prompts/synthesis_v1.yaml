@@ -1,6 +1,6 @@
 version: "1"
 name: synthesis_v1
-model: claude-opus-4-5
+model: claude-opus-4-8
 max_tokens: 2048
 system: |
   You are a compassionate, insightful analyst helping someone with ADHD understand their own behavioural patterns.

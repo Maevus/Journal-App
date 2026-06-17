@@ -1,5 +1,11 @@
 # Architecture decisions
 
+## Synthesis response caching + model refresh (2026-06-17)
+
+- **In-memory synthesis cache keyed on the rendered prompt** (`routers/synthesis.py`) — identical requests reuse the generated text instead of spending another LLM call. The key is `sha256(version + model + max_tokens + system + user_prompt)`; since `user_prompt` embeds the selected entries, range, and source, any entry edit/add or param change produces a different key and regenerates automatically. Bounded LRU (`_CACHE_MAX=32`), resets on restart — no schema/migration/dep (clears the stop conditions). First-of-todo-list item; verified the 2nd identical request makes no LLM call.
+- **Cache only on stream completion** — tokens accumulate during the stream and are stored only after it finishes, so a mid-stream failure caches nothing.
+- **Model default → `claude-opus-4-8`** (was `claude-opus-4-5`) in `llm_client.py`, `synthesis_v1.yaml`, and the `synthesis.py` fallback (now imports `DEFAULT_MODEL` so it can't drift). **Cost constants corrected to $5/$25 per 1M** (were $15/$75 — overstating spend ~3×). Model + pricing will become per-user config once users bring their own key/model.
+
 ## Single APP_MODE switch for demo/real (2026-06-17)
 
 - **One `APP_MODE` env var derives the whole data stack** (`backend/config.py`) — `demo` → `demo_journal.db` + `demo_chroma_db` + Keep sync off; `real` (default) → `journal.db` + `chroma_db` + sync on. Replaces having to set `DATABASE_URL` + `CHROMA_PERSIST_DIR` + `SYNC_ON_STARTUP` together, where forgetting `SYNC_ON_STARTUP=0` would pull real Keep notes into the demo DB. Supersedes the three-var recipe in the 2026-06-12 notes below.

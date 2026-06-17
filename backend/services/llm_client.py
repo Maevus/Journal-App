@@ -14,11 +14,13 @@ T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-opus-4-5"
+DEFAULT_MODEL = "claude-opus-4-8"
 
-# Approximate pricing for claude-opus-4-5 ($/token)
-_INPUT_COST_PER_TOKEN = 15.0 / 1_000_000
-_OUTPUT_COST_PER_TOKEN = 75.0 / 1_000_000
+# Approximate pricing for claude-opus-4-8 ($/token; $5 in / $25 out per 1M).
+# Keep in sync with DEFAULT_MODEL — both become per-user config once users bring
+# their own API key and choose their own model.
+_INPUT_COST_PER_TOKEN = 5.0 / 1_000_000
+_OUTPUT_COST_PER_TOKEN = 25.0 / 1_000_000
 
 _RETRYABLE = (
     anthropic.RateLimitError,
