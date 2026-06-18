@@ -1,5 +1,12 @@
 # Architecture decisions
 
+## Test suites: backend (pytest) + frontend (Vitest) (2026-06-18)
+
+- **Backend testing = pytest + pytest-asyncio + pytest-cov** (`backend/pytest.ini`, `asyncio_mode=auto`, coverage on every run). Tests use an **in-memory SQLite DB** and **mock the external boundaries** (Chroma, AsyncAnthropic, gkeepapi, filesystem) so they never hit the network/real DB/Chroma. Run from `backend/` (absolute imports). ~88% coverage; the API tests use FastAPI `TestClient` with `get_session` overridden (see `client`/`add_entry` fixtures in `tests/conftest.py`) — these are integration tests through the full HTTP→router→DB→JSON path.
+- **One real-Chroma integration test** (`tests/test_embeddings_integration.py`) covers the single seam the unit tests mock — real embed→search round-trip + ranking. Marked `integration`; deselect with `pytest -m "not integration"` for a fast unit-only loop. Decision: skip browser/e2e (Playwright) for now — a single-user app with strong types + API integration tests + this Chroma test gives enough confidence; e2e's flakiness/maintenance cost isn't justified here.
+- **Frontend testing = Vitest + @testing-library/react (jsdom)** — config in `vite.config.ts` (`test` block), matchers via `src/test/setup.ts`. `*.test.*` files are **excluded from `tsc -b`** (`tsconfig.app.json`) so the production build stays test-free. External boundaries (`EventSource`, `fetch`, the SSE hook) are mocked.
+- **`datetime.utcnow()` retired** in favour of `clock.utcnow_naive()` (`datetime.now(timezone.utc)` with tzinfo stripped) — preserves the app's **naive-UTC** storage convention so comparisons against stored timestamps stay valid. Don't reintroduce `datetime.utcnow()`.
+
 ## Mood reasoning stored per entry (2026-06-17)
 
 - **`JournalEntry` schema unfrozen, deliberately** — added a `mood_reasoning` column. This is normally a stop condition ("schema is frozen — stop and ask"); the user explicitly approved it for this feature after being shown the implications. The scorer already generated a reasoning sentence (`_MoodScore.reasoning`) and discarded it; now it's persisted.
