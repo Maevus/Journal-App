@@ -1,9 +1,10 @@
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
+from clock import utcnow_naive
 from models.journal import JournalEntry, get_session
 
 router = APIRouter()
@@ -21,7 +22,7 @@ async def get_trends(
         .order_by(JournalEntry.timestamp.asc())
     )
     if days > 0:
-        cutoff = datetime.utcnow() - timedelta(days=days)
+        cutoff = utcnow_naive() - timedelta(days=days)
         query = query.where(JournalEntry.timestamp >= cutoff)
     if source:
         query = query.where(JournalEntry.source == source)
@@ -40,7 +41,7 @@ async def get_trends(
     # filter is set — an empty chart is honest there, a fake sinusoid is not.
     if not trends and source is None:
         stub_days = days or 30
-        today = datetime.utcnow().date()
+        today = utcnow_naive().date()
         import random, math  # noqa: E401
 
         random.seed(42)

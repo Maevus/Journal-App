@@ -2,7 +2,7 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlmodel import Session, select
 
+from clock import utcnow_naive
 from models.journal import JournalEntry, get_session
 from services.llm_client import DEFAULT_MODEL, stream_text
 
@@ -64,10 +65,9 @@ async def synthesis(
 ):
     query = select(JournalEntry).order_by(JournalEntry.timestamp.asc())
     if days > 0:
-        # naive UTC (tzinfo stripped) to match JournalEntry.timestamp, which is
-        # stored naive; an aware datetime would break the >= comparison
-        now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-        cutoff = now_utc - timedelta(days=days)
+        # naive UTC to match JournalEntry.timestamp (stored naive); an aware
+        # datetime would break the >= comparison. See clock.utcnow_naive.
+        cutoff = utcnow_naive() - timedelta(days=days)
         query = query.where(JournalEntry.timestamp >= cutoff)
     if source:
         query = query.where(JournalEntry.source == source)

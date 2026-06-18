@@ -22,6 +22,7 @@ import anthropic
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
+from clock import utcnow_naive
 from models.journal import JournalEntry, engine
 from services.embeddings import embed_and_store
 
@@ -87,7 +88,7 @@ def parse_inline_date(content: str, fallback: Optional[datetime] = None) -> Opti
 
     day = int(m.group(1))
     month = _MONTH_NUM[m.group(2)[:3].lower()]
-    ref = fallback or datetime.utcnow()
+    ref = fallback or utcnow_naive()
 
     if m.group(3):
         year = int(m.group(3))
@@ -111,7 +112,7 @@ def parse_inline_date(content: str, fallback: Optional[datetime] = None) -> Opti
         return None
     # Reject future dates — journal entries describe the past; a "future"
     # header is an OCR misread (e.g. handwritten May read as Nov).
-    if best > datetime.utcnow() + timedelta(days=1):
+    if best > utcnow_naive() + timedelta(days=1):
         return None
     return best
 
@@ -194,7 +195,7 @@ def ingest_entries(
         entry = JournalEntry(
             source=source,
             content=content,
-            timestamp=authored_at or datetime.utcnow(),
+            timestamp=authored_at or utcnow_naive(),
             content_hash=content_hash,
             external_id=external_id,
         )
@@ -519,7 +520,7 @@ def _rescue_regressed_date(text: str, last_date: datetime) -> Optional[datetime]
             candidate = datetime(year, month, day)
         except ValueError:
             continue
-        if last_date <= candidate <= datetime.utcnow() + timedelta(days=1):
+        if last_date <= candidate <= utcnow_naive() + timedelta(days=1):
             return candidate
     return None
 

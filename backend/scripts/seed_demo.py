@@ -23,7 +23,7 @@ switch, so real Keep notes can never sync into the demo db. See backend/config.p
 import os
 import shutil
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -40,6 +40,7 @@ os.environ["APP_MODE"] = "demo"
 
 from sqlmodel import Session, SQLModel  # noqa: E402
 
+from clock import utcnow_naive  # noqa: E402
 from models.journal import JournalEntry, engine  # noqa: E402
 from services.embeddings import embed_and_store  # noqa: E402
 from services.ingestion import compute_hash  # noqa: E402
@@ -271,7 +272,7 @@ def main() -> None:
 
     SQLModel.metadata.create_all(engine)
 
-    now = datetime.utcnow()
+    now = utcnow_naive()
     goodnotes_page = 0
     counts: dict[str, int] = {}
 
