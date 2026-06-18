@@ -21,6 +21,7 @@ def session():
     SQLModel.metadata.create_all(engine)
     with Session(engine) as s:
         yield s
+    engine.dispose()
 
 
 @pytest.fixture(autouse=True)

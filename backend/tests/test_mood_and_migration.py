@@ -18,11 +18,15 @@ def test_ensure_schema_adds_missing_column(monkeypatch, tmp_path):
     con.commit()
     con.close()
 
-    monkeypatch.setattr(journal, "engine", create_engine(f"sqlite:///{db}"))
+    eng = create_engine(f"sqlite:///{db}")
+    monkeypatch.setattr(journal, "engine", eng)
     journal.ensure_schema()
     journal.ensure_schema()  # idempotent — must not error or duplicate
+    eng.dispose()
 
-    cols = [r[1] for r in sqlite3.connect(db).execute("PRAGMA table_info(journalentry)")]
+    con = sqlite3.connect(db)
+    cols = [r[1] for r in con.execute("PRAGMA table_info(journalentry)")]
+    con.close()
     assert "mood_reasoning" in cols
 
 
@@ -35,7 +39,8 @@ def mood_engine(monkeypatch):
     )
     SQLModel.metadata.create_all(engine)
     monkeypatch.setattr(ingestion, "engine", engine)
-    return engine
+    yield engine
+    engine.dispose()
 
 
 def _make_entry(engine) -> int:
