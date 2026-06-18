@@ -11,6 +11,7 @@ backend/htmlcov/
 
 # Node
 frontend/node_modules
+frontend/coverage/
 
 # Misc
 .DS_Store

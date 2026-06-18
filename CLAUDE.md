@@ -66,11 +66,14 @@ cp .env.example .env
 npm run dev                  # Vite dev server on :5173
 npm run build                # tsc -b + vite build
 npm run lint                 # ESLint
+npm test                     # Vitest (run once); npm run coverage for a report
 ```
 
 Tailwind v4 is configured via `@import "tailwindcss"` in `index.css` and the `@tailwindcss/vite` plugin in `vite.config.ts` — no `tailwind.config.js` needed.
 
 TypeScript strict flags are on (`noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly`) — unused symbols break the build.
+
+Tests use Vitest + Testing Library (jsdom) — config lives in `vite.config.ts` (`test` block) with `src/test/setup.ts` for jest-dom matchers. `*.test.ts(x)` files are excluded from `tsc -b` (see `tsconfig.app.json`) so the production build stays test-free. Covered: `api/client.ts`, the `useSSE`/`useTrends` hooks (EventSource/fetch mocked), and the `DayDetail`/`StreamingPanel` components. Untested so far: `MoodChart`, `SearchPanel`, the selectors, `App`.
 
 ## Key design decisions
 
