@@ -39,9 +39,12 @@ cd backend
 pip install -r requirements.txt          # first time; use .venv already present
 cp .env.example .env                     # add ANTHROPIC_API_KEY
 uvicorn main:app --reload
+.venv/bin/pytest                         # run the test suite (from backend/)
 ```
 
-**Imports are absolute from `backend/`** — always run `uvicorn` from within `backend/`, not the repo root.
+**Imports are absolute from `backend/`** — always run `uvicorn` (and `pytest`) from within `backend/`, not the repo root.
+
+Tests live in `backend/tests/` (pytest + pytest-asyncio, `asyncio_mode=auto` via `pytest.ini`). They use an in-memory SQLite DB and stub `embed_and_store`, so they never touch `journal.db` or Chroma. Coverage focuses on the ingest pipeline: dedup/edit-in-place, inline-date parsing, OCR blank-detection + PDF splitting, the `ensure_schema` migration, and mood-score write-back.
 
 Database: SQLite (`journal.db`) via SQLModel; `engine` and `get_session` live in `models/journal.py` and are imported directly by routers and services.
 
