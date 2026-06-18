@@ -268,8 +268,10 @@ async def score_mood_background(entry_id: int, content: str) -> None:
                 "Score the mood of a journal entry on a scale from 0.0 (very negative) "
                 "to 1.0 (very positive). Return a precise float and a one-sentence reasoning."
             ),
-            # Room for score + a sentence of reasoning; 128 truncated mid-JSON
-            max_tokens=256,
+            # Room for score + a sentence of reasoning. 128 truncated mid-JSON;
+            # 256 still truncated long reasonings (invalid tool JSON → validation
+            # error), so 512 for headroom.
+            max_tokens=512,
         )
 
         with Session(engine) as session:
