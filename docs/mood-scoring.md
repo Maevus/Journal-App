@@ -92,25 +92,40 @@ reset to `None` so the new text is re-scored.
 
 ## Cost — is the reasoning free?
 
-No, the reasoning costs **extra output tokens**, but the increment is small and
-the `max_tokens` cap is *not* what drives it.
+No, the reasoning costs **extra output tokens** — but it's the smaller half of
+the bill, and the `max_tokens` cap is *not* what drives it. The dominant cost is
+the **input**, which you pay whether or not you ask for reasoning.
 
-- **Input cost is identical** whether or not we ask for reasoning — the prompt,
-  system text, and tool schema are the same either way (~600-ish input tokens →
-  ~$0.003/entry at Opus rates).
-- **Output cost is where reasoning shows up.** A score alone is a few tokens; the
-  one-sentence reasoning adds ~20–40 tokens. Observed mood calls run ~95–130
-  output tokens total, so the reasoning is the *majority* of the output —
-  roughly **+$0.002/entry** versus a score-only call. Total per entry ≈
-  $0.005–0.008.
+Two real calls from the backfill (Opus 4.8 = $5/1M input, $25/1M output):
+
+| call | input tok | output tok | input $ | output $ | total |
+|---|---|---|---|---|---|
+| entry 770 | 788 | 115 | $0.0039 | $0.0029 | **$0.0068** |
+| entry 816 | 849 | 120 | $0.0042 | $0.0030 | **$0.0073** |
+
+- **Input ≈ $0.004/entry, and it's fixed.** It's ~750–850 tokens: the ~600-char
+  entry slice + the system prompt + the `_MoodScore` tool-schema JSON. Identical
+  whether or not reasoning is requested.
+- **Output ≈ $0.003/entry — this is where reasoning lives.** A bare score is ~5
+  tokens (~$0.0001); the one-sentence reasoning is ~110 tokens (~$0.0027). So the
+  reasoning is the *majority* of the output.
+- **Per-entry total ≈ $0.007** (so ~949 entries ≈ $6–7, which matches the backfill
+  spend). Breakdown:
+
+  ```
+  score only:        ~$0.004 input + ~$0.0001 output ≈ $0.004
+  score + reasoning: ~$0.004 input + ~$0.003   output ≈ $0.007   ← actual
+  reasoning premium:                                    ~$0.0025–0.003
+  ```
 - **The schema already required reasoning**, so every mood call has *always* paid
   for it — we simply used to discard it. Storing it is the same spend, more value.
 - **Raising `max_tokens` 256 → 512 does not increase cost.** `max_tokens` is a
   ceiling, not a charge; you pay for tokens actually generated, and reasonings sit
   well under either cap. The bump only prevents truncation.
 
-To make scoring cheaper you'd drop `reasoning` from `_MoodScore` (saving ~$0.002
-/entry but losing the explanations) — not adjust `max_tokens`.
+To make scoring cheaper you'd drop `reasoning` from `_MoodScore` — but that saves
+only the ~$0.0025 output premium, not the ~$0.004 input you're already paying.
+Adjusting `max_tokens` saves nothing.
 
 ## How the score is consumed
 
