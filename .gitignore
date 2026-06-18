@@ -1,7 +1,13 @@
 # Python
 backend/.venv
-backend/__pycache__
+**/__pycache__/
 **/*.pyc
+
+# Test artifacts
+backend/.coverage
+backend/.coverage.*
+backend/.pytest_cache/
+backend/htmlcov/
 
 # Node
 frontend/node_modules
@@ -24,3 +30,4 @@ mood_board/
 # Demo data (rebuild with backend/scripts/seed_demo.py)
 backend/demo_journal.db
 backend/demo_chroma_db/
+
