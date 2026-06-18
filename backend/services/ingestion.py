@@ -247,6 +247,12 @@ def redate_inline(session: Session) -> dict:
     return stats
 
 
+# Chars of entry text sent to the mood scorer. Longer entries are truncated to
+# this; the score then reflects only the opening. ~32% of entries exceed 600, so
+# this was raised from 600 to 2000 to cover the bulk of them (p90 ≈ 1515 chars).
+_MOOD_CONTENT_CHARS = 2000
+
+
 class _MoodScore(BaseModel):
     score: float  # 0.0 = very negative, 1.0 = very positive
     reasoning: str
@@ -261,7 +267,7 @@ async def score_mood_background(entry_id: int, content: str) -> None:
         from services.llm_client import structured_output
 
         result = await structured_output(
-            prompt=f"Analyse the mood of this journal entry:\n\n{content[:600]}",
+            prompt=f"Analyse the mood of this journal entry:\n\n{content[:_MOOD_CONTENT_CHARS]}",
             output_schema=_MoodScore,
             system=(
                 "You are an emotional-intelligence expert. "

@@ -42,7 +42,7 @@ it is **best-effort**: any failure is logged and swallowed, leaving
 - **User prompt:**
   > Analyse the mood of this journal entry:
   >
-  > `{content[:600]}`
+  > `{content[:2000]}`
 - **Output schema** (`_MoodScore`): `{ score: float, reasoning: str }`
 
 ### How the float is actually extracted (not text parsing)
@@ -62,7 +62,7 @@ forces the model to answer through a tool call, which guarantees a typed result:
 4. Transient errors (rate limit / connection / timeout) retry up to 3× with
    exponential backoff; other errors (e.g. billing) raise immediately.
 
-So "how the model determines the score" is: it reads the first 600 characters of
+So "how the model determines the score" is: it reads the first 2000 characters of
 the entry under the system instruction above and emits a `score` float (plus a
 reasoning sentence) as structured tool arguments.
 
@@ -84,8 +84,9 @@ reset to `None` so the new text is re-scored.
   same text can differ slightly — no `temperature` is pinned and the model uses
   adaptive thinking, so scoring is **not deterministic**. Re-scoring (e.g. after
   an edit, or via the backfill script) can shift a value by a few hundredths.
-- **Only the first 600 characters are scored** (`content[:600]`). A long entry is
-  judged on its opening, not its whole arc.
+- **Only the first 2000 characters are scored** (`content[:_MOOD_CONTENT_CHARS]`,
+  currently 2000). Entries longer than that are judged on their opening, not their
+  whole arc — ~7% of entries exceed 2000 chars (raised from 600, which clipped ~32%).
 - **Failures are silent.** If the call errors (network, billing, etc.), the entry
   keeps `mood_score = None` and simply doesn't appear on the chart until
   re-scored.
@@ -96,26 +97,29 @@ No, the reasoning costs **extra output tokens** — but it's the smaller half of
 the bill, and the `max_tokens` cap is *not* what drives it. The dominant cost is
 the **input**, which you pay whether or not you ask for reasoning.
 
-Two real calls from the backfill (Opus 4.8 = $5/1M input, $25/1M output):
+Two real calls from the backfill, measured at the old 600-char cap (Opus 4.8 =
+$5/1M input, $25/1M output):
 
 | call | input tok | output tok | input $ | output $ | total |
 |---|---|---|---|---|---|
 | entry 770 | 788 | 115 | $0.0039 | $0.0029 | **$0.0068** |
 | entry 816 | 849 | 120 | $0.0042 | $0.0030 | **$0.0073** |
 
-- **Input ≈ $0.004/entry, and it's fixed.** It's ~750–850 tokens: the ~600-char
-  entry slice + the system prompt + the `_MoodScore` tool-schema JSON. Identical
-  whether or not reasoning is requested.
+- **Input is the bulk: a fixed floor + the entry text.** The floor — system prompt
+  + the `_MoodScore` tool schema — is ~610 tokens (~$0.003) every call, regardless
+  of entry length or whether reasoning is asked for. On top sits the entry slice:
+  up to ~500 tokens (~$0.0025) at the 2000-char cap. So input runs ~$0.003 (short
+  entry) to ~$0.0055 (long entry, at the cap). *(The table above predates the cap
+  bump, so its long entry sent only 600 chars — under 2000 it would cost more.)*
 - **Output ≈ $0.003/entry — this is where reasoning lives.** A bare score is ~5
   tokens (~$0.0001); the one-sentence reasoning is ~110 tokens (~$0.0027). So the
   reasoning is the *majority* of the output.
-- **Per-entry total ≈ $0.007** (so ~949 entries ≈ $6–7, which matches the backfill
-  spend). Breakdown:
+- **Per-entry total ≈ $0.006 (short) to ~$0.0085 (long).** Breakdown:
 
   ```
-  score only:        ~$0.004 input + ~$0.0001 output ≈ $0.004
-  score + reasoning: ~$0.004 input + ~$0.003   output ≈ $0.007   ← actual
-  reasoning premium:                                    ~$0.0025–0.003
+  score only:        ~$0.003–0.0055 input + ~$0.0001 output ≈ $0.003–0.0055
+  score + reasoning: ~$0.003–0.0055 input + ~$0.003   output ≈ $0.006–0.0085
+  reasoning premium:                                            ~$0.0025–0.003
   ```
 - **The schema already required reasoning**, so every mood call has *always* paid
   for it — we simply used to discard it. Storing it is the same spend, more value.
@@ -124,7 +128,7 @@ Two real calls from the backfill (Opus 4.8 = $5/1M input, $25/1M output):
   well under either cap. The bump only prevents truncation.
 
 To make scoring cheaper you'd drop `reasoning` from `_MoodScore` — but that saves
-only the ~$0.0025 output premium, not the ~$0.004 input you're already paying.
+only the ~$0.0025 output premium, not the ~$0.003–0.0055 input you're already paying.
 Adjusting `max_tokens` saves nothing.
 
 ## How the score is consumed
