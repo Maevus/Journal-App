@@ -8,6 +8,7 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
 import services.ingestion as ingestion
+from models.journal import JournalEntry
 
 
 @pytest.fixture
@@ -28,3 +29,55 @@ def session():
 def _stub_embeddings(monkeypatch):
     """ingest_entries writes to Chroma via embed_and_store; no-op it in tests."""
     monkeypatch.setattr(ingestion, "embed_and_store", lambda *a, **k: None)
+
+
+@pytest.fixture
+def client(monkeypatch):
+    """A FastAPI TestClient backed by a fresh in-memory DB.
+
+    `get_session` is overridden so endpoints use the test DB; the TestClient is
+    used without a `with` block so the app's lifespan (startup Keep sync) never
+    runs. `client.engine` is exposed for seeding via the `add_entry` fixture.
+    """
+    from fastapi.testclient import TestClient
+
+    import main
+    import models.journal as journal
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    SQLModel.metadata.create_all(engine)
+
+    def _override_session():
+        with Session(engine) as s:
+            yield s
+
+    monkeypatch.setitem(main.app.dependency_overrides, journal.get_session, _override_session)
+    test_client = TestClient(main.app)
+    test_client.engine = engine
+    yield test_client
+    engine.dispose()
+
+
+@pytest.fixture
+def add_entry(client):
+    """Insert a JournalEntry into the client's DB. Returns the persisted row."""
+    def _add(content, *, source="text", mood_score=None, mood_reasoning=None,
+             timestamp=None, external_id=None):
+        with Session(client.engine) as s:
+            entry = JournalEntry(
+                source=source,
+                content=content,
+                content_hash=ingestion.compute_hash(content),
+                mood_score=mood_score,
+                mood_reasoning=mood_reasoning,
+                external_id=external_id,
+                **({"timestamp": timestamp} if timestamp is not None else {}),
+            )
+            s.add(entry)
+            s.commit()
+            s.refresh(entry)
+            return entry
+
+    return _add
