@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import './App.css'
+import { exportUrl } from './api/client'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
 import { StreamingPanel } from './components/StreamingPanel'
@@ -28,6 +29,23 @@ function App() {
           <div className="flex flex-col items-end gap-2">
             <TimeRangeSelector value={range} onChange={setRange} />
             <SourceSelector value={source} onChange={setSource} />
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold uppercase tracking-wide text-ink/60">Export</span>
+              <a
+                href={exportUrl('csv', source.value)}
+                download
+                className="btn-brutal bg-white px-2 py-0.5 text-xs"
+              >
+                CSV
+              </a>
+              <a
+                href={exportUrl('json', source.value)}
+                download
+                className="btn-brutal bg-white px-2 py-0.5 text-xs"
+              >
+                JSON
+              </a>
+            </div>
           </div>
         </div>
       </header>

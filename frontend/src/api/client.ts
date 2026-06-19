@@ -88,3 +88,10 @@ export function synthesisUrl(limit = 20, days = 0, source: string | null = null)
   if (source) params.set('source', source)
   return `${BASE_URL}/stream/synthesis?${params}`
 }
+
+export function exportUrl(format: 'csv' | 'json', source: string | null = null): string {
+  // source=null → all sources. Used as an <a href download> target.
+  const params = new URLSearchParams({ format })
+  if (source) params.set('source', source)
+  return `${BASE_URL}/export?${params}`
+}

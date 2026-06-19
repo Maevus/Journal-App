@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  exportUrl,
   fetchEntriesByDate,
   fetchTrends,
   ingestEntries,
@@ -35,6 +36,14 @@ describe('synthesisUrl', () => {
       `${BASE}/stream/synthesis?limit=10&days=30&source=google_keep`,
     )
     expect(synthesisUrl(10, 30, null)).not.toContain('source')
+  })
+})
+
+describe('exportUrl', () => {
+  it('builds the export URL with format and optional source', () => {
+    expect(exportUrl('csv')).toBe(`${BASE}/export?format=csv`)
+    expect(exportUrl('json', 'goodnotes')).toBe(`${BASE}/export?format=json&source=goodnotes`)
+    expect(exportUrl('csv', null)).not.toContain('source')
   })
 })
 
