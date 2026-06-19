@@ -1,7 +1,7 @@
 version: "1"
 name: synthesis_v1
 model: claude-opus-4-8
-max_tokens: 2048
+max_tokens: 4096
 system: |
   You are a compassionate, insightful analyst helping someone with ADHD understand their own behavioural patterns.
   Analyse journal entries and surface: mood trends, goal progress, recurring themes, and ADHD-relevant patterns.
