@@ -28,16 +28,21 @@ async def ingest(
         description="Automated source: 'keep', 'goodnotes', or 'all'. "
         "Omit to post entries directly via request body.",
     ),
+    force: bool = Query(
+        default=False,
+        description="GoodNotes only: re-OCR every page even if already ingested. "
+        "Off by default so re-exporting the growing PDF only OCRs new pages.",
+    ),
     request: Optional[IngestRequest] = None,
     session: Session = Depends(get_session),
 ):
     if source == "keep":
         stats, new_entries = await ingest_keep(session)
     elif source == "goodnotes":
-        stats, new_entries = await ingest_goodnotes(session)
+        stats, new_entries = await ingest_goodnotes(session, force=force)
     elif source == "all":
         keep_stats, keep_entries = await ingest_keep(session)
-        gn_stats, gn_entries = await ingest_goodnotes(session)
+        gn_stats, gn_entries = await ingest_goodnotes(session, force=force)
         stats = {
             "ingested": keep_stats["ingested"] + gn_stats["ingested"],
             "updated": keep_stats["updated"] + gn_stats["updated"],

@@ -5,7 +5,8 @@ asynchronously score mood via the LLM.
 Sources:
   - text        plain entries posted directly to /ingest
   - google_keep fetched via gkeepapi (GOOGLE_EMAIL + GOOGLE_APP_MASTER_TOKEN)
-  - goodnotes   scanned from iCloud folder (GOODNOTES_ICLOUD_PATH)
+  - goodnotes   scanned from a local folder (GOODNOTES_PATH), e.g. the
+                Google Drive Desktop mirror of the GoodNotes PDF backup
 """
 import asyncio
 import base64
@@ -462,7 +463,7 @@ async def redate_keep(session: Session) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# GoodNotes (iCloud folder) ingester
+# GoodNotes (local folder) ingester
 # ---------------------------------------------------------------------------
 
 
@@ -534,37 +535,43 @@ def _is_blank_transcript(text: str) -> bool:
     return len(t) < 80 and ("no text" in t or "blank" in t or "nothing to transcribe" in t)
 
 
-def _already_imported(session: Session, external_id: str, file_mtime: datetime) -> bool:
-    """True if this page was ingested after the file was last modified —
-    meaning the export is unchanged and re-OCR would be wasted spend."""
+def _page_already_imported(session: Session, external_id: str) -> bool:
+    """True if a GoodNotes entry already exists for this page's external_id.
+
+    The GoodNotes backup is one ever-growing PDF (≈1 page/day) re-exported in
+    full, so every re-export re-presents all prior pages. Skipping OCR by page
+    existence — not file mtime — means only genuinely new (appended) pages get a
+    paid Claude-vision call; re-exporting the same file costs nothing."""
     existing = session.exec(
         select(JournalEntry).where(
             JournalEntry.source == "goodnotes",
             JournalEntry.external_id == external_id,
         )
     ).first()
-    return (
-        existing is not None
-        and existing.imported_at is not None
-        and existing.imported_at >= file_mtime
-    )
+    return existing is not None
 
 
-async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
+async def ingest_goodnotes(
+    session: Session, force: bool = False
+) -> Tuple[dict, List[JournalEntry]]:
     """
-    Scan the iCloud GoodNotes folder and ingest each PDF page (or image) as
+    Scan the local GoodNotes folder and ingest each PDF page (or image) as
     its own journal entry, transcribed via Claude vision.
 
-    Page identity is "<filename>#p<N>" in external_id: re-exporting the same
-    file re-OCRs only when the file changed, edited pages update in place,
-    and unchanged pages dedupe by content hash. Entry dates come from
-    handwritten date headers (parse_inline_date), falling back to file mtime.
+    Page identity is "<filename>#p<N>" in external_id. The backup is one
+    ever-growing PDF re-exported in full, so already-ingested pages are skipped
+    by existence (`_page_already_imported`) before any paid OCR call — only
+    appended pages are transcribed. Entry dates come from handwritten date
+    headers (parse_inline_date), falling back to file mtime.
+
+    `force=True` re-OCRs every page even when it already exists (edited pages
+    then update in place; unchanged pages dedupe by content hash).
     """
-    raw_path = os.environ["GOODNOTES_ICLOUD_PATH"]
+    raw_path = os.environ["GOODNOTES_PATH"]
     folder = Path(os.path.expanduser(raw_path))
 
     if not folder.exists():
-        logger.warning("GoodNotes iCloud path does not exist: %s", folder)
+        logger.warning("GoodNotes path does not exist: %s", folder)
         return {"ingested": 0, "updated": 0, "skipped": 0}, []
 
     client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
@@ -594,7 +601,7 @@ async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
             last_date: Optional[datetime] = None
             for page_num, page_bytes in enumerate(page_pdfs, start=1):
                 external_id = f"{resolved.name}#p{page_num}"
-                if _already_imported(session, external_id, file_mtime):
+                if not force and _page_already_imported(session, external_id):
                     continue
                 text = await _ocr_with_claude(client, page_bytes, "application/pdf")
                 ocr_calls += 1
@@ -617,7 +624,7 @@ async def ingest_goodnotes(session: Session) -> Tuple[dict, List[JournalEntry]]:
                 )
         else:
             external_id = resolved.name
-            if _already_imported(session, external_id, file_mtime):
+            if not force and _page_already_imported(session, external_id):
                 continue
             text = await _ocr_with_claude(
                 client, resolved.read_bytes(), _IMAGE_MEDIA_TYPES[suffix]

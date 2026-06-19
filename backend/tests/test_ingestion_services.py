@@ -27,17 +27,28 @@ def test_rescue_regressed_date_no_header_returns_none():
     assert ing._rescue_regressed_date("no date here", datetime(2025, 5, 10)) is None
 
 
-# --- _already_imported ------------------------------------------------------
+# --- _page_already_imported -------------------------------------------------
 
-def test_already_imported(session):
+def test_page_already_imported(session):
     session.add(JournalEntry(
         source="goodnotes", content="p", content_hash="h1",
         external_id="Journal.pdf#p1", imported_at=datetime(2026, 1, 11),
     ))
     session.commit()
-    assert ing._already_imported(session, "Journal.pdf#p1", datetime(2026, 1, 10)) is True   # imported after mtime
-    assert ing._already_imported(session, "Journal.pdf#p1", datetime(2026, 1, 12)) is False  # file newer
-    assert ing._already_imported(session, "missing", datetime(2026, 1, 10)) is False
+    # Existence-based, mtime-independent: any matching goodnotes page → True.
+    assert ing._page_already_imported(session, "Journal.pdf#p1") is True
+    assert ing._page_already_imported(session, "Journal.pdf#p2") is False
+    assert ing._page_already_imported(session, "missing") is False
+
+
+def test_page_already_imported_ignores_other_sources(session):
+    # Same external_id under a different source must not count as imported.
+    session.add(JournalEntry(
+        source="google_keep", content="p", content_hash="h2",
+        external_id="Journal.pdf#p1",
+    ))
+    session.commit()
+    assert ing._page_already_imported(session, "Journal.pdf#p1") is False
 
 
 # --- redate_inline ----------------------------------------------------------
@@ -124,7 +135,7 @@ def _write_pdf(path):
 
 async def test_ingest_goodnotes_ingests_page(session, monkeypatch, tmp_path):
     _write_pdf(tmp_path / "Journal.pdf")
-    monkeypatch.setenv("GOODNOTES_ICLOUD_PATH", str(tmp_path))
+    monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
 
@@ -143,7 +154,7 @@ async def test_ingest_goodnotes_ingests_page(session, monkeypatch, tmp_path):
 
 async def test_ingest_goodnotes_skips_blank_pages(session, monkeypatch, tmp_path):
     _write_pdf(tmp_path / "Journal.pdf")
-    monkeypatch.setenv("GOODNOTES_ICLOUD_PATH", str(tmp_path))
+    monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
 
@@ -157,7 +168,7 @@ async def test_ingest_goodnotes_skips_blank_pages(session, monkeypatch, tmp_path
 
 async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path):
     (tmp_path / "photo.png").write_bytes(b"\x89PNG fake-bytes")
-    monkeypatch.setenv("GOODNOTES_ICLOUD_PATH", str(tmp_path))
+    monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
 
@@ -172,10 +183,87 @@ async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path):
 
 
 async def test_ingest_goodnotes_missing_folder(session, monkeypatch):
-    monkeypatch.setenv("GOODNOTES_ICLOUD_PATH", "/no/such/path/xyz")
+    monkeypatch.setenv("GOODNOTES_PATH", "/no/such/path/xyz")
     stats, entries = await ing.ingest_goodnotes(session)
     assert stats == {"ingested": 0, "updated": 0, "skipped": 0}
     assert entries == []
+
+
+# --- append-aware OCR skip (the regression guard) --------------------------
+
+def _write_pdf_pages(path, n):
+    """Write a PDF with `n` blank pages so each becomes its own page entry."""
+    writer = pypdf.PdfWriter()
+    for _ in range(n):
+        writer.add_blank_page(width=200, height=200)
+    with open(path, "wb") as fh:
+        writer.write(fh)
+
+
+class _OCRSpy:
+    """Counting spy: returns a distinct dated transcript per page so pages
+    don't collide on content hash."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def __call__(self, client, page_bytes, media_type):
+        self.calls += 1
+        day = 9 + self.calls  # 10 Jan, 11 Jan, ...
+        return f"{day} Jan 2026\nEntry number {self.calls}"
+
+
+def _setup_goodnotes(monkeypatch, tmp_path, spy):
+    monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+    monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
+    monkeypatch.setattr(ing, "_ocr_with_claude", spy)
+
+
+async def test_ingest_goodnotes_skips_already_imported_pages(session, monkeypatch, tmp_path):
+    # Re-exporting the SAME multi-page PDF must not re-OCR existing pages.
+    _write_pdf_pages(tmp_path / "Journal.pdf", 3)
+    spy = _OCRSpy()
+    _setup_goodnotes(monkeypatch, tmp_path, spy)
+
+    stats, _ = await ing.ingest_goodnotes(session)
+    assert stats["ingested"] == 3
+    assert spy.calls == 3
+
+    # Second run on the unchanged file: zero new OCR calls.
+    stats2, scored2 = await ing.ingest_goodnotes(session)
+    assert spy.calls == 3  # unchanged — no re-OCR
+    assert stats2["ingested"] == 0
+    assert scored2 == []
+
+
+async def test_ingest_goodnotes_ocrs_only_new_page_on_append(session, monkeypatch, tmp_path):
+    # A re-export with one extra appended page OCRs only that new page.
+    pdf = tmp_path / "Journal.pdf"
+    _write_pdf_pages(pdf, 2)
+    spy = _OCRSpy()
+    _setup_goodnotes(monkeypatch, tmp_path, spy)
+
+    await ing.ingest_goodnotes(session)
+    assert spy.calls == 2
+
+    _write_pdf_pages(pdf, 3)  # grew by one page
+    stats, _ = await ing.ingest_goodnotes(session)
+    assert spy.calls == 3  # only the appended page #p3
+    assert stats["ingested"] == 1
+
+
+async def test_ingest_goodnotes_force_reocrs_all_pages(session, monkeypatch, tmp_path):
+    _write_pdf_pages(tmp_path / "Journal.pdf", 3)
+    spy = _OCRSpy()
+    _setup_goodnotes(monkeypatch, tmp_path, spy)
+
+    await ing.ingest_goodnotes(session)
+    assert spy.calls == 3
+
+    # force=True re-OCRs every page even though all already exist.
+    await ing.ingest_goodnotes(session, force=True)
+    assert spy.calls == 6
 
 
 async def test_redate_keep_updates_timestamp(session, monkeypatch):

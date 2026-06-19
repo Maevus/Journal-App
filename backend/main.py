@@ -46,6 +46,41 @@ async def _startup_keep_sync() -> None:
         logger.exception("Startup Keep sync failed; continuing without it")
 
 
+async def _scheduled_goodnotes_scan() -> None:
+    """Scan the GoodNotes folder for newly-appended pages, then mood-score the
+    new entries. Best-effort, mirroring `_startup_keep_sync`: any failure is
+    logged and the schedule keeps running."""
+    from services.ingestion import ingest_goodnotes, score_mood_background
+
+    try:
+        with Session(engine) as session:
+            stats, new_entries = await ingest_goodnotes(session)
+            to_score = [(e.id, e.content) for e in new_entries]
+        logger.info("Scheduled GoodNotes scan: %s", stats)
+        for entry_id, content in to_score:
+            asyncio.create_task(score_mood_background(entry_id, content))
+    except Exception:  # noqa: BLE001
+        logger.exception("Scheduled GoodNotes scan failed; continuing without it")
+
+
+def _start_goodnotes_scheduler(scan=_scheduled_goodnotes_scan):
+    """Start an APScheduler interval job running the GoodNotes scan, when
+    `GOODNOTES_SCAN_INTERVAL_MIN > 0`. Returns the started scheduler, or None
+    when scheduling is disabled. The caller owns shutting it down."""
+    interval = config.GOODNOTES_SCAN_INTERVAL_MIN
+    if interval <= 0:
+        return None
+
+    # Imported here to keep import-time light when the scheduler is off.
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(scan, "interval", minutes=interval, id="goodnotes_scan")
+    scheduler.start()
+    logger.info("GoodNotes scan scheduled every %d min", interval)
+    return scheduler
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Plain print (not logger.info, which the default uvicorn config swallows):
@@ -61,7 +96,14 @@ async def lifespan(app: FastAPI):
     # Fire-and-forget so the server is usable immediately; new notes fold in
     # moments later rather than blocking boot on a full Keep sync.
     sync_task = asyncio.create_task(_startup_keep_sync()) if _sync_on_startup_enabled() else None
+    try:
+        goodnotes_scheduler = _start_goodnotes_scheduler()
+    except Exception:  # noqa: BLE001
+        logger.exception("GoodNotes scheduler failed to start; continuing without it")
+        goodnotes_scheduler = None
     yield
+    if goodnotes_scheduler is not None:
+        goodnotes_scheduler.shutdown(wait=False)
     if sync_task and not sync_task.done():
         sync_task.cancel()
 

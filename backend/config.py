@@ -38,3 +38,8 @@ CHROMA_PERSIST_DIR = os.getenv(
 SYNC_ON_STARTUP = os.getenv(
     "SYNC_ON_STARTUP", "0" if IS_DEMO else "1"
 ).lower() not in ("0", "false", "no")
+
+# Minutes between scheduled GoodNotes folder scans. 0 (default) disables the
+# scheduler entirely; a positive value starts an interval job at startup that
+# picks up newly-appended pages of the growing GoodNotes PDF backup.
+GOODNOTES_SCAN_INTERVAL_MIN = int(os.getenv("GOODNOTES_SCAN_INTERVAL_MIN", "0"))
