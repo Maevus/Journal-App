@@ -1,5 +1,20 @@
 # Architecture decisions
 
+## GoodNotes-from-Drive, export, chatbot plan (2026-06-19)
+
+- **GoodNotes source is the local Google Drive mirror, not iCloud** — env var renamed
+  `GOODNOTES_ICLOUD_PATH` → `GOODNOTES_PATH`. OCR skip is now **existence-based** (skip any
+  already-ingested page; `force` to re-OCR), since the diary is one append-only growing PDF;
+  optional APScheduler scan (`GOODNOTES_SCAN_INTERVAL_MIN`, default off). Full Google Drive
+  **API/OAuth** (a future user connecting their own Drive) is deferred — it merges with the
+  auth work ("Sign in with Google" = login + Drive in one).
+- **CSV/JSON export** (`GET /export`) added — no-dep data export; rich PDF-with-charts deferred.
+- **Chatbot designed, not yet built** — V1 = single-turn + inline date citations, RAG reusing
+  the existing hybrid search + SSE streaming. Spec: `docs/plans/chatbot-v1.md`.
+- **Isolated-worktree agents are the build workflow** — backend work runs in a `git worktree`
+  with the shared `backend/.venv` symlinked (sandbox override for test runs); frontend stays
+  in the main tree (no `node_modules` in a worktree). Proven on GoodNotes + export.
+
 ## Test suites: backend (pytest) + frontend (Vitest) (2026-06-18)
 
 - **Backend testing = pytest + pytest-asyncio + pytest-cov** (`backend/pytest.ini`, `asyncio_mode=auto`, coverage on every run). Tests use an **in-memory SQLite DB** and **mock the external boundaries** (Chroma, AsyncAnthropic, gkeepapi, filesystem) so they never hit the network/real DB/Chroma. Run from `backend/` (absolute imports). ~88% coverage; the API tests use FastAPI `TestClient` with `get_session` overridden (see `client`/`add_entry` fixtures in `tests/conftest.py`) — these are integration tests through the full HTTP→router→DB→JSON path.
