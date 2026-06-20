@@ -80,6 +80,27 @@ def test_log_usage_prints_cost(capsys):
     assert "input_tokens=1000" in out and "cost=$" in out
 
 
+def test_log_usage_prices_per_model(capsys):
+    """A cheaper model logs a lower cost than opus for identical token counts."""
+    llm._log_usage("claude-opus-4-8", 1000, 1000)
+    opus = capsys.readouterr().out
+    llm._log_usage("claude-haiku-4-5", 1000, 1000)
+    haiku = capsys.readouterr().out
+
+    def _cost(line):
+        return float(line.split("cost=$")[1].split()[0])
+
+    assert _cost(haiku) < _cost(opus)  # haiku must not be billed at opus rates
+
+
+def test_log_usage_unknown_model_falls_back_to_default(capsys):
+    llm._log_usage("some-future-model", 1000, 1000)
+    unknown = capsys.readouterr().out
+    llm._log_usage("claude-opus-4-8", 1000, 1000)
+    opus = capsys.readouterr().out
+    assert unknown.split("cost=$")[1] == opus.split("cost=$")[1]
+
+
 def test_async_client_uses_env_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test-123")
     captured = {}

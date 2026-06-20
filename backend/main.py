@@ -16,7 +16,7 @@ import config  # noqa: E402
 # Import models so SQLModel registers their tables before create_all
 import models.journal  # noqa: F401, E402
 from models.journal import engine
-from routers import entries, export, ingest, search, synthesis, trends
+from routers import chat, entries, export, ingest, search, synthesis, trends
 
 logger = logging.getLogger(__name__)
 
@@ -119,6 +119,7 @@ app.add_middleware(
 
 app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
 app.include_router(synthesis.router, prefix="/stream", tags=["synthesis"])
+app.include_router(chat.router, prefix="/stream", tags=["chat"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(trends.router, prefix="/trends", tags=["trends"])
 app.include_router(entries.router, prefix="/entries", tags=["entries"])

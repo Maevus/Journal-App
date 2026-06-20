@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import { exportUrl } from './api/client'
+import { ChatPanel } from './components/ChatPanel'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
 import { StreamingPanel } from './components/StreamingPanel'
@@ -80,6 +81,16 @@ function App() {
             </div>
           </section>
         </div>
+
+        {/* Ask: single-turn RAG over the whole journal, full-width below the grid */}
+        <section className="relative mt-8">
+          <span className="sticker absolute -top-3 left-6 z-10 rotate-1 bg-gold px-3 py-1 text-xs">
+            Ask
+          </span>
+          <div className="card-brutal p-6 pt-8">
+            <ChatPanel />
+          </div>
+        </section>
       </main>
     </div>
   )

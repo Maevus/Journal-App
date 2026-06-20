@@ -1,5 +1,27 @@
 # Architecture decisions
 
+## Chatbot V1 shipped — RAG over hybrid search (2026-06-19)
+
+- **Built per [`docs/plans/chatbot-v1.md`](plans/chatbot-v1.md)**: `GET /stream/chat?q=&limit`
+  SSE, single-turn, inline date citations. Reuses the existing SSE pattern + `stream_text`.
+- **Hybrid fusion extracted to `services/retrieval.py:hybrid_search`** (was inline in
+  `routers/search.py`) so `/search` and `/chat` share one implementation; `/search`
+  behaviour unchanged (its tests' Chroma stub repointed to `retrieval.search_similar`).
+- **Chat ignores the global range/source filters and has no response cache** — a question
+  defines its own scope, retrieval runs over **all** entries, each ask is one-off.
+  `backend/prompts/chat_v1.yaml`: answer only from provided entries, cite dates inline, no
+  clinical labels. Frontend: `ChatPanel` (full-width "Ask" panel) + `chatUrl`.
+- **✅ FIXED — date-blind retrieval (2026-06-20).** Time-scoped questions ("energy levels in
+  May/June") previously missed the 47 relevant May-2026 entries because `hybrid_search` matched
+  `entry.content` only and `limit≈8` over ~962 entries crowded out date-relevant hits. Fix:
+  `services/retrieval.py:parse_date_range` resolves a question's time scope via a cheap LLM
+  `structured_output` call (haiku) — degrading to no-filter when not time-scoped or on failure —
+  and `hybrid_search(start, end)` restricts the candidate set by `JournalEntry.timestamp` before
+  fusion (widening the semantic pool when windowed). Chat falls back to unscoped retrieval when a
+  window matches nothing, so it never falsely claims the journal is empty. Verified live on the
+  real 962-entry DB: a May+June window returns 8/8 in-window hits including the previously-missed
+  2026-05-11 Concerta entry.
+
 ## GoodNotes-from-Drive, export, chatbot plan (2026-06-19)
 
 - **GoodNotes source is the local Google Drive mirror, not iCloud** — env var renamed

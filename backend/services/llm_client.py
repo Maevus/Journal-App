@@ -16,11 +16,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "claude-opus-4-8"
 
-# Approximate pricing for claude-opus-4-8 ($/token; $5 in / $25 out per 1M).
-# Keep in sync with DEFAULT_MODEL — both become per-user config once users bring
-# their own API key and choose their own model.
-_INPUT_COST_PER_TOKEN = 5.0 / 1_000_000
-_OUTPUT_COST_PER_TOKEN = 25.0 / 1_000_000
+# Approximate pricing as ($ input, $ output) per token, keyed by model. Unknown
+# models fall back to the default (opus) rates. This whole table becomes per-user
+# config once users bring their own API key and choose their own model.
+_PRICING: dict[str, tuple[float, float]] = {
+    "claude-opus-4-8": (5.0 / 1_000_000, 25.0 / 1_000_000),  # $5 in / $25 out per 1M
+    "claude-haiku-4-5": (1.0 / 1_000_000, 5.0 / 1_000_000),  # $1 in / $5 out per 1M
+}
+_DEFAULT_PRICING = _PRICING["claude-opus-4-8"]
 
 _RETRYABLE = (
     anthropic.RateLimitError,
@@ -34,7 +37,8 @@ def _async_client() -> anthropic.AsyncAnthropic:
 
 
 def _log_usage(model: str, input_tokens: int, output_tokens: int) -> None:
-    cost = input_tokens * _INPUT_COST_PER_TOKEN + output_tokens * _OUTPUT_COST_PER_TOKEN
+    input_cost, output_cost = _PRICING.get(model, _DEFAULT_PRICING)
+    cost = input_tokens * input_cost + output_tokens * output_cost
     print(
         f"[llm] model={model} input_tokens={input_tokens} "
         f"output_tokens={output_tokens} cost=${cost:.5f}"
