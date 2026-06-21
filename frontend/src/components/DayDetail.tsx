@@ -67,7 +67,7 @@ export function DayDetail({ date, source, onClose }: DayDetailProps) {
         <ul className="max-h-80 space-y-3 overflow-y-auto">
           {entries.map((entry) => (
             <li key={entry.id} className="rounded-brutal border-2 border-ink bg-white p-3">
-              <div className="mb-2 flex items-center gap-2 text-xs">
+              <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
                 <span className="rounded-brutal border-2 border-ink bg-paper px-1.5 py-0.5 font-bold uppercase tracking-wide">
                   {entry.source}
                 </span>

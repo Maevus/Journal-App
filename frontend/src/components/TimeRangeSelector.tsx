@@ -18,7 +18,7 @@ interface TimeRangeSelectorProps {
 
 export function TimeRangeSelector({ value, onChange }: TimeRangeSelectorProps) {
   return (
-    <div role="group" aria-label="Time period" className="inline-flex gap-2">
+    <div role="group" aria-label="Time period" className="flex flex-wrap gap-2 sm:justify-end">
       {TIME_RANGES.map((range) => (
         <button
           key={range.label}

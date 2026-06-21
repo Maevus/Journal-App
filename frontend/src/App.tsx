@@ -16,10 +16,10 @@ function App() {
 
   return (
     <div className="min-h-screen bg-paper font-sans text-ink">
-      <header className="border-b-4 border-ink bg-white px-6 py-4">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-end justify-between gap-4">
+      <header className="border-b-4 border-ink bg-white px-4 py-4 sm:px-6">
+        <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <div>
-            <h1 className="font-display text-3xl font-bold uppercase tracking-tight">
+            <h1 className="font-display text-2xl font-bold uppercase tracking-tight sm:text-3xl">
               Journal{' '}
               <span className="inline-block -rotate-1 bg-rose px-2">Analytics</span>
             </h1>
@@ -27,10 +27,10 @@ function App() {
               Patterns from your personal journal
             </p>
           </div>
-          <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-col items-start gap-2 sm:items-end">
             <TimeRangeSelector value={range} onChange={setRange} />
             <SourceSelector value={source} onChange={setSource} />
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs font-bold uppercase tracking-wide text-ink/60">Export</span>
               <a
                 href={exportUrl('csv', source.value)}
@@ -51,7 +51,7 @@ function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl px-6 py-8">
+      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
         {/* Full-bleed trends section, sticker label overlapping the frame */}
         <section className="relative mb-8">
           <span className="sticker absolute -top-3 left-6 z-10 -rotate-1 bg-rose px-3 py-1 text-xs">

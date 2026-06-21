@@ -37,7 +37,7 @@ export function StreamingPanel({ range, source }: StreamingPanelProps) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
         <span className="font-display text-xl font-bold lowercase">
           {scopeLabel.toLowerCase()}
         </span>

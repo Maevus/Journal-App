@@ -16,7 +16,7 @@ interface SourceSelectorProps {
 
 export function SourceSelector({ value, onChange }: SourceSelectorProps) {
   return (
-    <div role="group" aria-label="Journal source" className="inline-flex gap-2">
+    <div role="group" aria-label="Journal source" className="flex flex-wrap gap-2 sm:justify-end">
       {SOURCE_FILTERS.map((sourceFilter) => (
         <button
           key={sourceFilter.label}

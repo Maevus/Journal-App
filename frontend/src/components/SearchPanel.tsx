@@ -53,7 +53,7 @@ export function SearchPanel() {
         <div className="flex-1 space-y-3 overflow-y-auto">
           {results.map((result) => (
             <div key={result.id} className="rounded-brutal border-2 border-ink bg-paper p-3">
-              <div className="mb-1 flex items-center gap-3 text-xs text-ink/60">
+              <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink/60">
                 <span className="font-bold uppercase tracking-wide">{result.source}</span>
                 <span className="font-medium">
                   {new Date(result.timestamp).toLocaleDateString()}
