@@ -68,12 +68,17 @@ export function ChatPanel() {
     if (!q || isStreaming) return
     // The current turn renders live from the hook. When a new question is asked,
     // freeze the just-finished turn into history first (in this event handler —
-    // not an effect), then start the next stream.
-    const priorPair: ChatMessage[] =
-      pending !== null ? [
-        { role: 'user', content: pending },
-        { role: 'assistant', content: text },
-      ] : []
+    // not an effect), then start the next stream. Only carry it forward if it
+    // actually produced an answer — a turn that was aborted/errored before any
+    // token must not become an empty assistant message (the API rejects empty
+    // non-final content) or a blank bubble.
+    const carryPrior = pending !== null && text.trim() !== ''
+    const priorPair: ChatMessage[] = carryPrior
+      ? [
+          { role: 'user', content: pending! },
+          { role: 'assistant', content: text },
+        ]
+      : []
     const messages: ChatMessage[] = [
       ...conversation.flatMap((t): ChatMessage[] => [
         { role: 'user', content: t.question },
@@ -82,8 +87,8 @@ export function ChatPanel() {
       ...priorPair,
       { role: 'user', content: q },
     ]
-    if (pending !== null) {
-      setConversation((prev) => [...prev, { question: pending, answer: text, sources }])
+    if (carryPrior) {
+      setConversation((prev) => [...prev, { question: pending!, answer: text, sources }])
     }
     setPending(q)
     setQuestion('')

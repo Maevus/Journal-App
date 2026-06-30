@@ -73,4 +73,3 @@ describe('useSSE', () => {
     expect(result.current.isStreaming).toBe(false)
   })
 })
-5

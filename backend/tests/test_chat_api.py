@@ -123,6 +123,65 @@ def test_chat_condenses_followup_before_retrieval(client, monkeypatch):
     assert seen_hybrid["query"] == "how was my mood in June?"
 
 
+def test_chat_sends_prior_turns_and_raw_question_to_llm(client, monkeypatch):
+    """The LLM receives the prior turns as real user/assistant messages, then a
+    final user turn whose prompt carries the retrieved entries and the *raw*
+    question (retrieval uses the condensed standalone query; the answer does not)."""
+    def fake_hybrid(session, query, limit, start=None, end=None):
+        return [(JournalEntry(id=1, source="text", content="CONTENT_TOKEN",
+                              content_hash="h", timestamp=datetime(2026, 6, 1)), 0.5)]
+
+    monkeypatch.setattr(chat, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory(rewritten="STANDALONE_QUERY"))
+    calls = []
+    monkeypatch.setattr(chat, "stream_text", _fake_stream_factory(calls))
+
+    r = client.post("/stream/chat", json={"messages": [
+        {"role": "user", "content": "how was my mood in May?"},
+        {"role": "assistant", "content": "Steady in May."},
+        {"role": "user", "content": "and June?"},
+    ]})
+
+    assert r.status_code == 200
+    sent = calls[0]["messages"]
+    # Prior turns passed through verbatim …
+    assert sent[0] == {"role": "user", "content": "how was my mood in May?"}
+    assert sent[1] == {"role": "assistant", "content": "Steady in May."}
+    # … then a final user turn carrying the entries + the raw question.
+    assert sent[-1]["role"] == "user"
+    assert "CONTENT_TOKEN" in sent[-1]["content"]
+    assert "and June?" in sent[-1]["content"]  # raw question, not the standalone
+    assert "STANDALONE_QUERY" not in sent[-1]["content"]
+    assert calls[0]["system"]  # system prompt is passed
+
+
+def test_chat_filters_empty_history_messages(client, monkeypatch):
+    """An empty-content prior turn (e.g. an aborted answer) is dropped before
+    building the LLM messages — the API rejects empty non-final content."""
+    monkeypatch.setattr(
+        chat, "hybrid_search",
+        lambda *a, **k: [(JournalEntry(id=1, source="text", content="c",
+                                       content_hash="h", timestamp=datetime(2026, 5, 1)), 0.5)],
+    )
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
+    calls = []
+    monkeypatch.setattr(chat, "stream_text", _fake_stream_factory(calls))
+
+    r = client.post("/stream/chat", json={"messages": [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": "   "},  # empty answer (whitespace)
+        {"role": "user", "content": "second question"},
+    ]})
+
+    assert r.status_code == 200
+    sent = calls[0]["messages"]
+    assert all(m["content"].strip() for m in sent)  # no empty-content message survives
+    assert sent[0] == {"role": "user", "content": "first question"}
+    assert sent[-1]["role"] == "user" and "second question" in sent[-1]["content"]
+
+
 def test_chat_passes_parsed_date_window_to_retrieval(client, monkeypatch):
     window = (datetime(2026, 5, 1), datetime(2026, 7, 1))
     seen = {}

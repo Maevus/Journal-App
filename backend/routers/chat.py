@@ -75,7 +75,13 @@ async def chat(
 
     # Prior turns (everything before the current question) give condensation the
     # context to resolve follow-ups like "and June?" into a standalone query.
-    history = [{"role": m.role, "content": m.content} for m in messages[:-1]]
+    # Drop any empty-content turns: the Messages API rejects empty non-final
+    # content, and an aborted/errored turn can leave one in the client history.
+    history = [
+        {"role": m.role, "content": m.content}
+        for m in messages[:-1]
+        if m.content.strip()
+    ]
     standalone = await condense_query(history, question)
 
     # Time-scoped questions constrain retrieval to that window; non-scoped get

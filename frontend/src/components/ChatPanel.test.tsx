@@ -69,6 +69,39 @@ describe('ChatPanel', () => {
     expect(screen.getByText('DayDetail for 2026-05-10')).toBeInTheDocument()
   })
 
+  it('sends prior turns as history on a follow-up and freezes the first turn', () => {
+    chat.text = 'Answer A [1]'
+    chat.sources = [{ n: 1, id: 5, date: '2026-05-10', source: 'text', snippet: 'a' }]
+    render(<ChatPanel />)
+
+    ask('first question')
+    ask('second question')
+
+    // Second Ask carries the finished first turn as real user/assistant messages.
+    expect(chat.start).toHaveBeenLastCalledWith([
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'Answer A [1]' },
+      { role: 'user', content: 'second question' },
+    ])
+    // Both turns are now on screen (first frozen, second live).
+    expect(screen.getByText(/first question/)).toBeInTheDocument()
+    expect(screen.getByText(/second question/)).toBeInTheDocument()
+  })
+
+  it('does not carry an empty answer into history (Bug #1 — abort/error then ask)', () => {
+    // A turn that produced no answer (aborted before any token / errored).
+    chat.text = ''
+    chat.sources = []
+    render(<ChatPanel />)
+
+    ask('first question') // ends with no answer
+    ask('second question')
+
+    // No empty assistant message is sent, and no blank turn is frozen.
+    expect(chat.start).toHaveBeenLastCalledWith([{ role: 'user', content: 'second question' }])
+    expect(screen.queryByText(/first question/)).toBeNull()
+  })
+
   it('Clear resets the conversation', () => {
     chat.text = 'An answer [1]'
     chat.sources = [{ n: 1, id: 5, date: '2026-05-10', source: 'text', snippet: 'x' }]

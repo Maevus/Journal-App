@@ -47,6 +47,40 @@ describe('useChatStream', () => {
     })
   })
 
+  it('reassembles a frame split across read() boundaries', async () => {
+    // The token frame `data: "Hello"\n\n` is delivered in two chunks that split
+    // it mid-value — the buffer must stitch them back together.
+    const fetchMock = vi.fn().mockResolvedValue(
+      streamResponse(['data: "Hel', 'lo"\n\n', 'data: [DONE]\n\n']),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useChatStream())
+    act(() => result.current.start([{ role: 'user', content: 'hi' }]))
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    expect(result.current.text).toBe('Hello')
+  })
+
+  it('aborts mid-stream after some tokens have arrived', async () => {
+    const enc = new TextEncoder()
+    // A stream that emits one token then stays open (never closes).
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode('data: "Hi"\n\n'))
+      },
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, body } as unknown as Response))
+
+    const { result } = renderHook(() => useChatStream())
+    act(() => result.current.start([{ role: 'user', content: 'hi' }]))
+
+    await waitFor(() => expect(result.current.text).toBe('Hi'))
+    expect(result.current.isStreaming).toBe(true)
+    act(() => result.current.abort())
+    expect(result.current.isStreaming).toBe(false)
+  })
+
   it('stops streaming on abort', () => {
     vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {}))) // never resolves
     const { result } = renderHook(() => useChatStream())
