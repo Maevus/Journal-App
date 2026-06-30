@@ -132,3 +132,44 @@ async def test_parse_date_range_rejects_time_bearing_iso(monkeypatch):
             is_time_scoped=True, start_date="2026-05-01T12:00:00", end_date="2026-05-31")),
     )
     assert await retrieval.parse_date_range("energy in May") == (None, None)
+
+
+# --- condense_query (LLM stubbed) ---
+
+async def test_condense_query_first_turn_skips_llm(monkeypatch):
+    """No history → the question already stands alone; no LLM call is made."""
+    async def boom(*args, **kwargs):
+        raise AssertionError("structured_output should not be called on the first turn")
+
+    monkeypatch.setattr(retrieval, "structured_output", boom)
+    assert await retrieval.condense_query([], "how was my mood in May?") == "how was my mood in May?"
+
+
+async def test_condense_query_rewrites_followup(monkeypatch):
+    monkeypatch.setattr(
+        retrieval, "structured_output",
+        _fake_structured(retrieval.StandaloneQuery(standalone_query="how was my mood in June?")),
+    )
+    history = [
+        {"role": "user", "content": "how was my mood in May?"},
+        {"role": "assistant", "content": "Steady in May."},
+    ]
+    assert await retrieval.condense_query(history, "and June?") == "how was my mood in June?"
+
+
+async def test_condense_query_degrades_to_raw_on_error(monkeypatch):
+    async def boom(*args, **kwargs):
+        raise RuntimeError("api down")
+
+    monkeypatch.setattr(retrieval, "structured_output", boom)
+    history = [{"role": "user", "content": "earlier"}]
+    assert await retrieval.condense_query(history, "and June?") == "and June?"
+
+
+async def test_condense_query_falls_back_when_blank(monkeypatch):
+    monkeypatch.setattr(
+        retrieval, "structured_output",
+        _fake_structured(retrieval.StandaloneQuery(standalone_query="   ")),
+    )
+    history = [{"role": "user", "content": "earlier"}]
+    assert await retrieval.condense_query(history, "and June?") == "and June?"

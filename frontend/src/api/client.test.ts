@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
-  chatUrl,
+  chatStreamUrl,
   exportUrl,
   fetchEntriesByDate,
   fetchTrends,
@@ -40,13 +40,9 @@ describe('synthesisUrl', () => {
   })
 })
 
-describe('chatUrl', () => {
-  it('builds the chat URL with q and default limit', () => {
-    expect(chatUrl('hello world')).toBe(`${BASE}/stream/chat?q=hello+world&limit=8`)
-  })
-
-  it('includes a custom limit', () => {
-    expect(chatUrl('climbing', 3)).toBe(`${BASE}/stream/chat?q=climbing&limit=3`)
+describe('chatStreamUrl', () => {
+  it('points at the chat stream endpoint', () => {
+    expect(chatStreamUrl()).toBe(`${BASE}/stream/chat`)
   })
 })
 

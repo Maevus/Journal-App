@@ -89,10 +89,25 @@ export function synthesisUrl(limit = 20, days = 0, source: string | null = null)
   return `${BASE_URL}/stream/synthesis?${params}`
 }
 
-export function chatUrl(q: string, limit = 8): string {
-  // Single-turn RAG question; chat ignores the global range/source filters.
-  const params = new URLSearchParams({ q, limit: String(limit) })
-  return `${BASE_URL}/stream/chat?${params}`
+/** One turn's role + text, as sent to / held by the multi-turn chat. */
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+/** A retrieved entry the answer can cite, rendered as a clickable chip. */
+export interface Citation {
+  n: number
+  id: number
+  date: string
+  source: string
+  snippet: string
+}
+
+/** Endpoint for the multi-turn chat stream. POST the conversation; chat ignores
+ *  the global range/source filters — a question defines its own scope. */
+export function chatStreamUrl(): string {
+  return `${BASE_URL}/stream/chat`
 }
 
 export function exportUrl(format: 'csv' | 'json', source: string | null = null): string {

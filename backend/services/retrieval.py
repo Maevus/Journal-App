@@ -30,9 +30,11 @@ logger = logging.getLogger(__name__)
 # which needs `embed_and_store` to persist metadata + a one-off re-embed.
 _WINDOWED_SEMANTIC_POOL = 100
 
-# A small, fast model is plenty for date extraction — no need to spend the default
-# (opus) on it. Bare alias to match the house style (llm_client.DEFAULT_MODEL etc.).
+# A small, fast model is plenty for date extraction + follow-up condensation — no
+# need to spend the default (opus) on either. Bare alias to match the house style
+# (llm_client.DEFAULT_MODEL etc.).
 _DATE_PARSE_MODEL = "claude-haiku-4-5"
+_CONDENSE_MODEL = "claude-haiku-4-5"
 
 
 def hybrid_search(
@@ -149,3 +151,48 @@ async def parse_date_range(
     start = datetime(start_day.year, start_day.month, start_day.day)
     end_exclusive = datetime(end_day.year, end_day.month, end_day.day) + timedelta(days=1)
     return (start, end_exclusive)
+
+
+class StandaloneQuery(BaseModel):
+    """A follow-up question rewritten to stand on its own for retrieval."""
+
+    standalone_query: str
+
+
+_CONDENSE_SYSTEM = (
+    "You rewrite a follow-up question in a conversation about a personal journal into "
+    "a single self-contained search query. Resolve pronouns and elliptical references "
+    "('and June?', 'what about then?') using the earlier turns, so the query makes sense "
+    "on its own without the conversation. Preserve any time period the user means. Return "
+    "only the rewritten query — do not answer the question."
+)
+
+
+async def condense_query(history: list[dict], question: str) -> str:
+    """Rewrite a follow-up `question` into a standalone retrieval query.
+
+    `history` is the prior conversation as a list of `{role, content}` messages
+    (oldest first), excluding the current question. On the first turn (no
+    history) the question already stands alone, so this returns it verbatim with
+    no LLM call. Any failure degrades to the raw question — retrieval then runs
+    on the literal text, exactly as a single-turn ask would.
+    """
+    if not history:
+        return question
+
+    transcript = "\n".join(f"{m['role']}: {m['content']}" for m in history)
+    prompt = f"Conversation so far:\n{transcript}\n\nFollow-up question: {question}"
+    try:
+        result = await structured_output(
+            prompt=prompt,
+            output_schema=StandaloneQuery,
+            system=_CONDENSE_SYSTEM,
+            model=_CONDENSE_MODEL,
+            max_tokens=256,
+        )
+    except Exception as exc:  # never let condensation break a chat answer
+        logger.warning("query condense failed (%s); using raw question", type(exc).__name__)
+        return question
+
+    rewritten = result.standalone_query.strip()
+    return rewritten or question

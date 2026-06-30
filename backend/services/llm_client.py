@@ -46,19 +46,28 @@ def _log_usage(model: str, input_tokens: int, output_tokens: int) -> None:
 
 
 async def stream_text(
-    prompt: str,
+    prompt: str | None = None,
     system: str = "",
     model: str = DEFAULT_MODEL,
     max_tokens: int = 1024,
     max_retries: int = 3,
+    messages: list[dict] | None = None,
 ) -> AsyncGenerator[str, None]:
     """
     Yield text tokens from the LLM with exponential-backoff retry.
+
+    Pass either a single `prompt` (wrapped as one user turn) or a full
+    `messages` history (for multi-turn callers like chat). Exactly one of the
+    two must be given; `messages` wins if both are present.
 
     Retry fires on connection/rate-limit errors before the first token is
     delivered.  Mid-stream errors propagate without retry — tokens already
     yielded cannot be un-sent.
     """
+    if messages is None:
+        if prompt is None:
+            raise ValueError("stream_text requires either `prompt` or `messages`")
+        messages = [{"role": "user", "content": prompt}]
     client = _async_client()
     last_err: Exception | None = None
 
@@ -68,7 +77,7 @@ async def stream_text(
                 model=model,
                 max_tokens=max_tokens,
                 system=system,
-                messages=[{"role": "user", "content": prompt}],
+                messages=messages,
             ) as stream:
                 async for chunk in stream.text_stream:
                     yield chunk
