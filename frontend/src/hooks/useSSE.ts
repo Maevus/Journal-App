@@ -49,7 +49,7 @@ export function useSSE(url: string): UseSSEReturn {
       es.close()
       sourceRef.current = null
       setIsStreaming(false)
-      setError('Stream connection failed — is the backend running?')
+      setError('Stream connection failed.')
     }
   }, [url])
 

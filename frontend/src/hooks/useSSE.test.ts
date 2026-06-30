@@ -69,7 +69,8 @@ describe('useSSE', () => {
     const { result } = renderHook(() => useSSE('http://x/stream'))
     act(() => result.current.start())
     act(() => FakeEventSource.last().onerror?.())
-    expect(result.current.error).toMatch(/backend running/i)
+    expect(result.current.error).toMatch(/Stream connection failed/i)
     expect(result.current.isStreaming).toBe(false)
   })
 })
+5
