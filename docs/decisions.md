@@ -1,5 +1,34 @@
 # Architecture decisions
 
+## Multi-user architecture planned + Chatbot V2 shipped (2026-06-30)
+
+- **Chatbot V2 shipped** — multi-turn conversation + structured clickable citations
+  (`3c2687c`). `POST /stream/chat` carries the client-held conversation (stateless
+  server); a cheap haiku `condense_query` rewrites follow-ups into standalone queries
+  before the existing `parse_date_range` + `hybrid_search`. Answers cite entries inline
+  with `[n]` markers; a terminal `event: sources` SSE frame carries the numbered entries
+  so the frontend renders a clickable chip per *used* `[n]`, opening that entry's day in
+  `DayDetail`. New `useChatStream` hook (POST + ReadableStream) sits alongside `useSSE`.
+  See ADRs **0001** (chat over POST+fetch vs synthesis's GET+EventSource) and **0002**
+  (citation protocol). A background review agent caught a real bug — an aborted/errored
+  turn became an empty assistant message → API 400 on the follow-up — **fixed in
+  `37328ec`** with the multi-turn tests that had been missing.
+- **CONTEXT.md (root) is now the glossary; `docs/adr/` holds one-per-decision ADRs.**
+  Adopted the grill-with-docs structure: `CONTEXT.md` for terms (turn/conversation/
+  citation), `docs/adr/` for ADRs, this file stays the running log, `docs/plans/` for
+  plans.
+- **Multi-user architecture decided (planning only, nothing built)** — for a public
+  launch (Reddit) + commercial practice. Six decisions in **ADR 0003** /
+  `docs/plans/multi-user.md`: Sign in with Google (identity); httpOnly session cookie
+  (sessions); `user_id` isolation re-applied per store (SQL + Chroma) via a
+  `get_current_user` dependency + scoped data-access helpers + Postgres RLS + isolation
+  tests, with per-user dedup as composite `UNIQUE(user_id, content_hash)`; **Postgres +
+  Alembic** (replacing the SQLite-only `ensure_schema()`); a **freemium** cost model
+  (metered free-tier on our key + global cap + haiku, BYO-key/paid upgrade — the per-user
+  meter is also todo #13's usage widget); and the existing-data migration (owner user →
+  nullable → backfill → NOT NULL, plus Chroma metadata backfill). The Postgres/DB choice
+  is carved into its own supersedable ADR section. Build order: identity end-to-end first.
+
 ## Chatbot V1 shipped — RAG over hybrid search (2026-06-19)
 
 - **Built per [`docs/plans/chatbot-v1.md`](plans/chatbot-v1.md)**: `GET /stream/chat?q=&limit`
