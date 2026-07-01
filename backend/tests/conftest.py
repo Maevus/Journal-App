@@ -9,6 +9,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 import services.ingestion as ingestion
 from models.journal import JournalEntry
+from models.user import User  # noqa: F401 — registers the users table for create_all
 
 
 @pytest.fixture
