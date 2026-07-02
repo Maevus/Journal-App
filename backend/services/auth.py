@@ -72,6 +72,23 @@ def create_session(db: Session, user: User, ttl: timedelta = SESSION_TTL) -> str
     return raw_token
 
 
+def revoke_session(db: Session, raw_token: Optional[str]) -> None:
+    """Server-side logout: delete the presented session row. Idempotent.
+
+    Clearing the browser cookie alone would leave the token live in the DB —
+    anyone holding a copy could keep using it until expiry. Deleting the row
+    makes logout mean logout.
+    """
+    if not raw_token:
+        return
+    row = db.exec(
+        select(UserSession).where(UserSession.token_hash == _hash_token(raw_token))
+    ).first()
+    if row is not None:
+        db.delete(row)
+        db.commit()
+
+
 def resolve_session(db: Session, raw_token: Optional[str]) -> Optional[User]:
     """The raw cookie token → its `User`, or None if missing/unknown/expired."""
     if not raw_token:

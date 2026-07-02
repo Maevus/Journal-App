@@ -12,6 +12,8 @@ pyyaml>=6.0.0
 gkeepapi>=0.16.0
 watchdog>=4.0.0
 pypdf>=4.0.0
+authlib>=1.7.0
+itsdangerous>=2.0.0  # SessionMiddleware cookie signing (in-flight OAuth state)
 
 # Testing
 pytest>=8.0.0

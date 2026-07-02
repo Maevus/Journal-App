@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session, SQLModel
+from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
 
@@ -17,7 +18,7 @@ import config  # noqa: E402
 import models.journal  # noqa: F401, E402
 import models.user  # noqa: F401, E402
 from models.journal import engine
-from routers import chat, entries, export, ingest, search, synthesis, trends
+from routers import auth, chat, entries, export, ingest, search, synthesis, trends
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +114,20 @@ app = FastAPI(title="Journal Analytics API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=[config.FRONTEND_URL],
+    # The session cookie only rides along on SPA fetches when the browser is
+    # told credentials are welcome (and the frontend passes `credentials:
+    # "include"`). Requires an explicit origin above — "*" is refused.
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Signed cookie holding the in-flight OAuth `state` between /auth/login and
+# /auth/callback (Authlib's CSRF check). Handshake scaffolding only — the
+# logged-in session is the separate httpOnly cookie from services/auth.py.
+app.add_middleware(SessionMiddleware, secret_key=config.SESSION_SECRET, same_site="lax")
 
+app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])
 app.include_router(synthesis.router, prefix="/stream", tags=["synthesis"])
 app.include_router(chat.router, prefix="/stream", tags=["chat"])

@@ -16,6 +16,7 @@ still reachable:
   DATABASE_URL=sqlite:///./scratch.db uvicorn main:app # one override
 """
 import os
+import secrets
 
 _MODES = {"real", "demo"}
 
@@ -43,3 +44,19 @@ SYNC_ON_STARTUP = os.getenv(
 # scheduler entirely; a positive value starts an interval job at startup that
 # picks up newly-appended pages of the growing GoodNotes PDF backup.
 GOODNOTES_SCAN_INTERVAL_MIN = int(os.getenv("GOODNOTES_SCAN_INTERVAL_MIN", "0"))
+
+# --- Auth: Sign in with Google (ADR 0003) ---
+# OAuth client credentials from Google Cloud Console → Credentials → OAuth
+# client ID (type "Web application", redirect URI http://localhost:8000/auth/callback).
+# Distinct from GOOGLE_EMAIL/GOOGLE_APP_MASTER_TOKEN, which are Keep-ingestion creds.
+GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
+GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
+
+# Signs the short-lived SessionMiddleware cookie that carries the in-flight
+# OAuth `state` between /auth/login and /auth/callback. Unset → random per
+# boot, which is fine in dev (the only casualty is a login mid-restart);
+# production must pin it so logins survive restarts and multiple workers.
+SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
+
+# Where the callback sends the browser after login — the SPA's origin.
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
