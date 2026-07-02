@@ -39,6 +39,7 @@ export async function ingestEntries(
 ): Promise<{ ingested: number; skipped: number }> {
   const res = await fetch(`${BASE_URL}/ingest`, {
     method: 'POST',
+    credentials: 'include', // /ingest is auth-gated: writes are stamped to their owner
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ entries, source }),
   })

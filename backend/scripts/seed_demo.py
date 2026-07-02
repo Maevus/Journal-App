@@ -42,6 +42,8 @@ from sqlmodel import Session, SQLModel  # noqa: E402
 
 from clock import utcnow_naive  # noqa: E402
 from models.journal import JournalEntry, engine  # noqa: E402
+from models.user import User  # noqa: E402
+from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB  # noqa: E402
 from services.embeddings import embed_and_store  # noqa: E402
 from services.ingestion import compute_hash  # noqa: E402
 
@@ -277,6 +279,13 @@ def main() -> None:
     counts: dict[str, int] = {}
 
     with Session(engine) as session:
+        # The always-logged-in demo account (services/auth.py resolves to it in
+        # demo mode). Seeded entries belong to it so user-scoped reads see them.
+        demo_user = User(google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
+        session.add(demo_user)
+        session.commit()
+        session.refresh(demo_user)
+
         for i, (days_ago, hour, source, mood, content) in enumerate(DEMO_ENTRIES):
             timestamp = (now - timedelta(days=days_ago)).replace(
                 hour=hour, minute=(i * 17) % 60, second=0, microsecond=0
@@ -300,6 +309,7 @@ def main() -> None:
                 content_hash=compute_hash(content),
                 external_id=external_id,
                 imported_at=now,
+                user_id=demo_user.id,
             )
             session.add(entry)
             session.commit()

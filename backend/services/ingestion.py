@@ -421,11 +421,31 @@ def _fetch_keep_entries() -> List[RawEntry]:
     return entries
 
 
+def _resolve_sync_owner(session: Session) -> Optional[int]:
+    """Who owns entries from the Keep/GoodNotes connectors.
+
+    Both connectors are env-configured for exactly one Google account
+    (GOOGLE_EMAIL) — pre-multi-user legacy; per-user connector config comes
+    later. Their entries belong to that account's user. Before that person
+    has ever logged in, rows stay unowned (NULL) — made visible by running
+    scripts/backfill_owner.py once, or permanently at the Postgres migration.
+    """
+    from models.user import User
+
+    email = os.getenv("GOOGLE_EMAIL")
+    if not email:
+        return None
+    user = session.exec(select(User).where(User.email == email)).first()
+    return user.id if user is not None else None
+
+
 async def ingest_keep(session: Session) -> Tuple[dict, List[JournalEntry]]:
     """Fetch all Google Keep notes and persist new ones (idempotent via content hash)."""
     entries = await asyncio.get_running_loop().run_in_executor(None, _fetch_keep_entries)
     logger.info("Google Keep: fetched %d notes", len(entries))
-    return ingest_entries(entries, "google_keep", session)
+    return ingest_entries(
+        entries, "google_keep", session, user_id=_resolve_sync_owner(session)
+    )
 
 
 async def redate_keep(session: Session) -> dict:
@@ -650,4 +670,6 @@ async def ingest_goodnotes(
         "GoodNotes: %d OCR call(s), %d page(s) with text in %s",
         ocr_calls, len(raw_entries), folder,
     )
-    return ingest_entries(raw_entries, "goodnotes", session)
+    return ingest_entries(
+        raw_entries, "goodnotes", session, user_id=_resolve_sync_owner(session)
+    )

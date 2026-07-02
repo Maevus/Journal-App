@@ -19,12 +19,20 @@ from typing import Optional
 from fastapi import Cookie, Depends, HTTPException, status
 from sqlmodel import Session, select
 
+import config
 from clock import utcnow_naive
 from models.journal import get_session
 from models.user import User, UserSession
 
 SESSION_COOKIE = "session"
 SESSION_TTL = timedelta(days=14)
+
+# The demo deployment's always-logged-in account (decisions.md 2026-07-02).
+# Demo mode never 401s: get_current_user resolves to this user instead, so the
+# showcase stays zero-friction while running the identical isolation code path
+# (everything still scoped to a real user_id — no auth bypass to fork the code).
+DEMO_GOOGLE_SUB = "demo"
+DEMO_EMAIL = "demo@journal.local"
 
 
 def get_or_create_user(db: Session, *, google_sub: str, email: str) -> User:
@@ -106,6 +114,8 @@ def get_current_user(
     db: Session = Depends(get_session),
 ) -> User:
     """FastAPI dependency: the logged-in `User`, or 401. The auth gate."""
+    if config.IS_DEMO:
+        return get_or_create_user(db, google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
     user = resolve_session(db, session_token)
     if user is None:
         raise HTTPException(

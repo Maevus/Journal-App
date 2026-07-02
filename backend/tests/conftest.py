@@ -62,6 +62,28 @@ def client(monkeypatch):
 
 
 @pytest.fixture
+def login(client):
+    """Log a user into the TestClient: create the user + a session row in the
+    client's DB and plant the raw token in the cookie jar. Returns the User."""
+    from models.user import User as U
+    from services.auth import SESSION_COOKIE, create_session
+
+    def _login(email="user@example.com", google_sub=None):
+        # expire_on_commit=False: the returned User is read after the session
+        # closes (tests assert on user.id) — don't let commit expire it.
+        with Session(client.engine, expire_on_commit=False) as s:
+            user = U(google_sub=google_sub or f"sub-{email}", email=email)
+            s.add(user)
+            s.commit()
+            s.refresh(user)
+            raw_token = create_session(s, user)
+        client.cookies.set(SESSION_COOKIE, raw_token)
+        return user
+
+    return _login
+
+
+@pytest.fixture
 def add_entry(client):
     """Insert a JournalEntry into the client's DB. Returns the persisted row."""
     def _add(content, *, source="text", mood_score=None, mood_reasoning=None,

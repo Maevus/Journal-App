@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from models.journal import get_session
+from models.user import User
+from services.auth import get_current_user
 from services.ingestion import (
     ingest_entries,
     ingest_goodnotes,
@@ -35,6 +37,7 @@ async def ingest(
     ),
     request: Optional[IngestRequest] = None,
     session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     if source == "keep":
         stats, new_entries = await ingest_keep(session)
@@ -55,7 +58,13 @@ async def ingest(
                 status_code=422,
                 detail="Request body required when source is not 'keep', 'goodnotes', or 'all'.",
             )
-        stats, new_entries = ingest_entries(request.entries, request.source, session)
+        # Direct text posts belong to whoever posted them. The keep/goodnotes
+        # branches above resolve their own owner (the env-configured GOOGLE_EMAIL
+        # account) — the connectors are single-account legacy, and the user
+        # *triggering* a sync isn't necessarily the account being synced.
+        stats, new_entries = ingest_entries(
+            request.entries, request.source, session, user_id=user.id
+        )
 
     for entry in new_entries:
         background_tasks.add_task(score_mood_background, entry.id, entry.content)
