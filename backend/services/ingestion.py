@@ -122,6 +122,8 @@ def ingest_entries(
     raw_entries: List[Union[str, RawEntry]],
     source: str,
     session: Session,
+    *,
+    user_id: Optional[int] = None,
 ) -> Tuple[dict, List[JournalEntry]]:
     """
     Persist entries: insert new ones, update edited ones, skip unchanged ones.
@@ -129,7 +131,11 @@ def ingest_entries(
     Dedup is two-tier: an exact content-hash match means the entry is unchanged
     (skip); otherwise a row with the same source + external_id means the note
     was edited at its source — it is updated in place (content, hash, date,
-    re-embedded, mood reset) rather than duplicated.
+    re-embedded, mood reset) rather than duplicated. Both tiers are scoped to
+    `user_id` (ADR 0003): identical text from two accounts must both persist,
+    and one user's source-edit must never overwrite another's row. `None`
+    means unowned — the user-less startup sync paths; their rows are
+    backfilled to the owner at the Postgres migration.
 
     Accepts plain strings (timestamped at ingest time) or RawEntry tuples that
     carry the source's own authored date. Returns (stats_dict, entries needing
@@ -155,7 +161,10 @@ def ingest_entries(
 
         content_hash = compute_hash(content)
         existing = session.exec(
-            select(JournalEntry).where(JournalEntry.content_hash == content_hash)
+            select(JournalEntry).where(
+                JournalEntry.content_hash == content_hash,
+                JournalEntry.user_id == user_id,
+            )
         ).first()
 
         if existing:
@@ -174,6 +183,7 @@ def ingest_entries(
                 select(JournalEntry).where(
                     JournalEntry.source == source,
                     JournalEntry.external_id == external_id,
+                    JournalEntry.user_id == user_id,
                 )
             ).first()
             if prior is not None:
@@ -199,6 +209,7 @@ def ingest_entries(
             timestamp=authored_at or utcnow_naive(),
             content_hash=content_hash,
             external_id=external_id,
+            user_id=user_id,
         )
         session.add(entry)
         session.commit()

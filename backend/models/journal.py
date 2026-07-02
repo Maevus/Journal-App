@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Generator, Optional
 
-from sqlalchemy import text
+from sqlalchemy import UniqueConstraint, text
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from clock import utcnow_naive
@@ -11,14 +11,23 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 
 class JournalEntry(SQLModel, table=True):
+    # Dedup is per-user: identical text from two accounts hashes the same, so a
+    # global UNIQUE(content_hash) would drop the second user's entry. The hash
+    # stays a pure content fingerprint; user_id is the scoping dimension.
+    __table_args__ = (UniqueConstraint("user_id", "content_hash", name="uq_user_content"),)
+
     id: Optional[int] = Field(default=None, primary_key=True)
+    # Owner (ADR 0003). NULL = legacy rows from before multi-user and the
+    # user-less startup sync paths; backfilled at the Postgres migration,
+    # where the column also tightens to NOT NULL.
+    user_id: Optional[int] = Field(default=None, foreign_key="users.id", index=True)
     source: str  # "google_keep" | "goodnotes" | "text"
     content: str
     timestamp: datetime = Field(default_factory=utcnow_naive)  # when the entry was authored
     mood_score: Optional[float] = None  # 0.0 (very negative) – 1.0 (very positive)
     # One-sentence explanation of the mood score, from the same LLM call
     mood_reasoning: Optional[str] = None
-    content_hash: str = Field(unique=True, index=True)
+    content_hash: str = Field(index=True)
     # When the entry entered this system; NULL for rows predating the field
     imported_at: Optional[datetime] = Field(default_factory=utcnow_naive)
     # ID of the note at its source (Keep note id → keep.google.com/#NOTE/<id>)
@@ -44,4 +53,11 @@ def ensure_schema() -> None:
         # the column, so there's nothing to migrate.
         if cols and "mood_reasoning" not in cols:
             conn.execute(text("ALTER TABLE journalentry ADD COLUMN mood_reasoning VARCHAR"))
+            conn.commit()
+        # Multi-user isolation column (ADR 0003). Note: a pre-existing DB keeps
+        # its baked-in global UNIQUE(content_hash) — SQLite can't drop a column
+        # constraint via ALTER. Harmless while the DB is single-user; the
+        # constraint swaps to the composite one at the Postgres migration.
+        if cols and "user_id" not in cols:
+            conn.execute(text("ALTER TABLE journalentry ADD COLUMN user_id INTEGER"))
             conn.commit()

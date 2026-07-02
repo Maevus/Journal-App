@@ -142,3 +142,19 @@
 - GoodNotes exports may already include OCR text layer — check export format first
 - If not: use GPT-4o vision in the ingestion pipeline to transcribe images
 - Rejected: Tesseract (poor handwriting accuracy), Google Vision (extra service to manage)
+## Multi-user isolation phase (2026-07-02)
+
+- **Demo mode auto-logs-in a seeded demo user** — once data routes are gated,
+  `APP_MODE=demo` resolves `get_current_user` to a seeded demo user instead of
+  401ing: the showcase stays zero-friction, the isolation code path is identical
+  (everything scoped to a real user_id), and no auth code is bypassed.
+- **Logged-out real mode → login gate screen** — the dashboard renders only when
+  authenticated; matches the data reality (every endpoint 401s) and avoids
+  maintaining a broken empty-dashboard state.
+- **`user_id` is nullable for now** — NULL marks legacy rows and the user-less
+  startup-sync paths; scoped reads won't see them. Backfill + NOT NULL + FK
+  tighten at the Postgres/Alembic migration, per ADR 0003.
+- **Pre-existing SQLite DBs keep their global UNIQUE(content_hash)** — SQLite
+  can't drop a baked-in column constraint via ALTER; harmless while those DBs
+  are single-user. New DBs get the composite `(user_id, content_hash)`. The
+  constraint swaps at the Postgres migration ("only the constraint swaps").

@@ -28,6 +28,7 @@ def test_ensure_schema_adds_missing_column(monkeypatch, tmp_path):
     cols = [r[1] for r in con.execute("PRAGMA table_info(journalentry)")]
     con.close()
     assert "mood_reasoning" in cols
+    assert "user_id" in cols  # multi-user isolation column (ADR 0003)
 
 
 @pytest.fixture
