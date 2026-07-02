@@ -27,6 +27,29 @@ SESSION_COOKIE = "session"
 SESSION_TTL = timedelta(days=14)
 
 
+def get_or_create_user(db: Session, *, google_sub: str, email: str) -> User:
+    """Resolve a Google login to our account, creating it on first sight.
+
+    The OAuth callback runs this on every login. `google_sub` (Google's stable
+    identity) is the anchor: one sub → one account, forever, so a repeat login
+    never mints a duplicate. `email` is a mutable display attribute, so it's
+    refreshed to Google's current value. Both params are keyword-only — they're
+    both strings and trivial to transpose positionally, which would mis-key an
+    account; naming them at the call site removes that whole class of bug.
+    """
+    user = db.exec(select(User).where(User.google_sub == google_sub)).first()
+    if user is None:
+        user = User(google_sub=google_sub, email=email)
+    elif user.email == email:
+        return user  # unchanged — no write
+    else:
+        user.email = email
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 def _hash_token(raw_token: str) -> str:
     return hashlib.sha256(raw_token.encode()).hexdigest()
 
