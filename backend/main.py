@@ -125,7 +125,16 @@ app.add_middleware(
 # Signed cookie holding the in-flight OAuth `state` between /auth/login and
 # /auth/callback (Authlib's CSRF check). Handshake scaffolding only — the
 # logged-in session is the separate httpOnly cookie from services/auth.py.
-app.add_middleware(SessionMiddleware, secret_key=config.SESSION_SECRET, same_site="lax")
+# `session_cookie` MUST differ from services.auth.SESSION_COOKIE: the
+# middleware appends its own Set-Cookie (a deletion, once the state is
+# consumed) after the route's, and under a shared name that deletes the
+# login token in the very response that set it.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=config.SESSION_SECRET,
+    session_cookie="oauth_state",
+    same_site="lax",
+)
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(ingest.router, prefix="/ingest", tags=["ingest"])

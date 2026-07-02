@@ -102,3 +102,61 @@ def test_logout_revokes_session_server_side(client, monkeypatch):
 
 def test_logout_without_cookie_is_idempotent(client):
     assert client.post("/auth/logout").status_code == 204
+
+
+def test_login_cookie_survives_oauth_state_cleanup(client, monkeypatch):
+    """Regression: SessionMiddleware must not clobber the login cookie.
+
+    In the real flow the callback request carries the middleware's signed
+    cookie holding the OAuth `state`; Authlib pops it during the exchange,
+    so the middleware appends its own deletion Set-Cookie to OUR response.
+    If the two cookies share a name, that deletion lands after ours and the
+    login token dies in the very response that set it. The simple-mock tests
+    never touch request.session, so only this test exercises that path.
+    """
+    import json
+    from base64 import b64encode
+
+    import itsdangerous
+    from starlette.middleware.sessions import SessionMiddleware
+
+    import config
+    import main
+    import routers.auth as auth_routes
+
+    # Forge what /auth/login would have left behind: the middleware's signed
+    # cookie carrying the pending state — under whatever name it's configured.
+    middleware = next(
+        m for m in main.app.user_middleware if m.cls is SessionMiddleware
+    )
+    state_cookie = middleware.kwargs.get("session_cookie", "session")
+    signer = itsdangerous.TimestampSigner(str(config.SESSION_SECRET))
+    payload = {"_state_google_teststate": {"data": {}}}
+    forged = signer.sign(b64encode(json.dumps(payload).encode())).decode()
+    client.cookies.set(state_cookie, forged)
+
+    async def fake_exchange(request):
+        # What real Authlib does that the simple mock doesn't: consume the
+        # pending state, leaving the middleware session modified-and-empty.
+        request.session.pop("_state_google_teststate")
+        return {"userinfo": {"sub": "sub-1", "email": "a@example.com"}}
+
+    monkeypatch.setattr(
+        auth_routes.oauth.google, "authorize_access_token", fake_exchange
+    )
+
+    resp = client.get("/auth/callback", follow_redirects=False)
+
+    # Assert on the raw headers, not the cookie jar: httpx's jar happens to
+    # keep the first same-named cookie, but real browsers apply Set-Cookie
+    # headers in order — a trailing `session=null; expires=1970` deletes the
+    # login token in the very response that set it.
+    from services.auth import SESSION_COOKIE
+
+    session_setters = [
+        v
+        for k, v in resp.headers.multi_items()
+        if k.lower() == "set-cookie" and v.startswith(f"{SESSION_COOKIE}=")
+    ]
+    assert len(session_setters) == 1, session_setters
+    assert not session_setters[0].startswith(f"{SESSION_COOKIE}=null")
