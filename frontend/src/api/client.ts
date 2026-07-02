@@ -110,6 +110,36 @@ export function chatStreamUrl(): string {
   return `${BASE_URL}/stream/chat`
 }
 
+/** The logged-in identity, from GET /auth/me. */
+export interface AuthUser {
+  id: number
+  email: string
+}
+
+/** Where "Sign in with Google" points — a full-page navigation into the OAuth
+ *  redirect chain (backend → Google → backend → back here), not a fetch. */
+export function loginUrl(): string {
+  return `${BASE_URL}/auth/login`
+}
+
+/** The logged-in user, or null when there's no live session. Auth calls send
+ *  `credentials: 'include'` so the httpOnly session cookie rides along on the
+ *  cross-origin request — without it the browser strips the cookie. */
+export async function fetchMe(): Promise<AuthUser | null> {
+  const res = await fetch(`${BASE_URL}/auth/me`, { credentials: 'include' })
+  if (res.status === 401) return null // logged out — an answer, not an error
+  if (!res.ok) throw new Error(`Auth check failed: ${res.statusText}`)
+  return res.json() as Promise<AuthUser>
+}
+
+export async function logout(): Promise<void> {
+  const res = await fetch(`${BASE_URL}/auth/logout`, {
+    method: 'POST',
+    credentials: 'include',
+  })
+  if (!res.ok) throw new Error(`Logout failed: ${res.statusText}`)
+}
+
 export function exportUrl(format: 'csv' | 'json', source: string | null = null): string {
   // source=null → all sources. Used as an <a href download> target.
   const params = new URLSearchParams({ format })

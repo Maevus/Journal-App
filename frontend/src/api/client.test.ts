@@ -4,8 +4,11 @@ import {
   chatStreamUrl,
   exportUrl,
   fetchEntriesByDate,
+  fetchMe,
   fetchTrends,
   ingestEntries,
+  loginUrl,
+  logout,
   searchEntries,
   sourceNoteUrl,
   synthesisUrl,
@@ -114,5 +117,50 @@ describe('ingestEntries', () => {
   it('throws on failure', async () => {
     mockFetch(null, false, 'Bad Request')
     await expect(ingestEntries(['a'])).rejects.toThrow(/Ingest failed/)
+  })
+})
+
+describe('auth', () => {
+  function mockAuthFetch(status: number, body: unknown = null) {
+    const fn = vi.fn().mockResolvedValue({
+      ok: status < 400,
+      status,
+      statusText: 'x',
+      json: async () => body,
+    } as Response)
+    vi.stubGlobal('fetch', fn)
+    return fn
+  }
+
+  it('loginUrl points at the backend OAuth kick-off', () => {
+    expect(loginUrl()).toBe(`${BASE}/auth/login`)
+  })
+
+  it('fetchMe returns the user and sends the cookie', async () => {
+    const fn = mockAuthFetch(200, { id: 1, email: 'a@example.com' })
+    const user = await fetchMe()
+    expect(user).toEqual({ id: 1, email: 'a@example.com' })
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe(`${BASE}/auth/me`)
+    expect(init.credentials).toBe('include')
+  })
+
+  it('fetchMe returns null on 401 (logged out, not an error)', async () => {
+    mockAuthFetch(401)
+    expect(await fetchMe()).toBeNull()
+  })
+
+  it('fetchMe throws on non-401 failures', async () => {
+    mockAuthFetch(500)
+    await expect(fetchMe()).rejects.toThrow(/Auth check failed/)
+  })
+
+  it('logout POSTs with the cookie', async () => {
+    const fn = mockAuthFetch(204)
+    await logout()
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe(`${BASE}/auth/logout`)
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('include')
   })
 })

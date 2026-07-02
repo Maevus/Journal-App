@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import { exportUrl } from './api/client'
+import { AuthWidget } from './components/AuthWidget'
 import { ChatPanel } from './components/ChatPanel'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
@@ -28,6 +29,7 @@ function App() {
             </p>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
+            <AuthWidget />
             <TimeRangeSelector value={range} onChange={setRange} />
             <SourceSelector value={source} onChange={setSource} />
             <div className="flex flex-wrap items-center gap-2">
