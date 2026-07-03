@@ -41,10 +41,10 @@ def _sources_from_response(text):
     return None
 
 
-def test_chat_streams_answer_sources_and_retrieves_for_question(client, monkeypatch):
+def test_chat_streams_answer_sources_and_retrieves_for_question(client, me, monkeypatch):
     seen = {}
 
-    def fake_hybrid(session, query, limit, start=None, end=None):
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
         seen.update(query=query, limit=limit, start=start, end=end)
         return [
             (
@@ -84,7 +84,7 @@ def test_chat_streams_answer_sources_and_retrieves_for_question(client, monkeypa
     }]
 
 
-def test_chat_condenses_followup_before_retrieval(client, monkeypatch):
+def test_chat_condenses_followup_before_retrieval(client, me, monkeypatch):
     """A follow-up is rewritten to a standalone query, which then feeds retrieval
     and date parsing (not the raw fragment)."""
     seen_condense = {}
@@ -95,7 +95,7 @@ def test_chat_condenses_followup_before_retrieval(client, monkeypatch):
         seen_parse["question"] = question
         return (None, None)
 
-    def fake_hybrid(session, query, limit, start=None, end=None):
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
         seen_hybrid["query"] = query
         return [(JournalEntry(id=1, source="text", content="c", content_hash="h",
                               timestamp=datetime(2026, 6, 1)), 0.5)]
@@ -123,11 +123,11 @@ def test_chat_condenses_followup_before_retrieval(client, monkeypatch):
     assert seen_hybrid["query"] == "how was my mood in June?"
 
 
-def test_chat_sends_prior_turns_and_raw_question_to_llm(client, monkeypatch):
+def test_chat_sends_prior_turns_and_raw_question_to_llm(client, me, monkeypatch):
     """The LLM receives the prior turns as real user/assistant messages, then a
     final user turn whose prompt carries the retrieved entries and the *raw*
     question (retrieval uses the condensed standalone query; the answer does not)."""
-    def fake_hybrid(session, query, limit, start=None, end=None):
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
         return [(JournalEntry(id=1, source="text", content="CONTENT_TOKEN",
                               content_hash="h", timestamp=datetime(2026, 6, 1)), 0.5)]
 
@@ -156,7 +156,7 @@ def test_chat_sends_prior_turns_and_raw_question_to_llm(client, monkeypatch):
     assert calls[0]["system"]  # system prompt is passed
 
 
-def test_chat_filters_empty_history_messages(client, monkeypatch):
+def test_chat_filters_empty_history_messages(client, me, monkeypatch):
     """An empty-content prior turn (e.g. an aborted answer) is dropped before
     building the LLM messages — the API rejects empty non-final content."""
     monkeypatch.setattr(
@@ -182,11 +182,11 @@ def test_chat_filters_empty_history_messages(client, monkeypatch):
     assert sent[-1]["role"] == "user" and "second question" in sent[-1]["content"]
 
 
-def test_chat_passes_parsed_date_window_to_retrieval(client, monkeypatch):
+def test_chat_passes_parsed_date_window_to_retrieval(client, me, monkeypatch):
     window = (datetime(2026, 5, 1), datetime(2026, 7, 1))
     seen = {}
 
-    def fake_hybrid(session, query, limit, start=None, end=None):
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
         seen.update(start=start, end=end)
         return [(JournalEntry(id=1, source="text", content="c", content_hash="h",
                               timestamp=datetime(2026, 5, 1)), 0.5)]
@@ -204,11 +204,11 @@ def test_chat_passes_parsed_date_window_to_retrieval(client, monkeypatch):
     assert seen == {"start": window[0], "end": window[1]}
 
 
-def test_chat_falls_back_to_unscoped_when_window_empty(client, monkeypatch):
+def test_chat_falls_back_to_unscoped_when_window_empty(client, me, monkeypatch):
     window = (datetime(2020, 1, 1), datetime(2020, 2, 1))
     calls = []
 
-    def fake_hybrid(session, query, limit, start=None, end=None):
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
         calls.append((start, end))
         if start is None and end is None:
             return [(JournalEntry(id=1, source="text", content="c", content_hash="h",
@@ -230,7 +230,7 @@ def test_chat_falls_back_to_unscoped_when_window_empty(client, monkeypatch):
     assert len(stream_calls) == 1  # still answers (from the unscoped retry)
 
 
-def test_blank_last_message_short_circuits(client, monkeypatch):
+def test_blank_last_message_short_circuits(client, me, monkeypatch):
     calls = []
     retrieved = []
     monkeypatch.setattr(chat, "stream_text", _fake_stream_factory(calls))

@@ -84,12 +84,32 @@ def login(client):
 
 
 @pytest.fixture
-def add_entry(client):
-    """Insert a JournalEntry into the client's DB. Returns the persisted row."""
-    def _add(content, *, source="text", mood_score=None, mood_reasoning=None,
-             timestamp=None, external_id=None):
+def me(login):
+    """The default logged-in user. Now every data route requires auth and reads
+    are user-scoped, route tests depend on this (directly, or via add_entry)."""
+    return login()
+
+
+# Sentinel default for add_entry's user_id: "owned by `me`". Distinct from None,
+# which explicitly means a legacy unowned row.
+_OWNED_BY_ME = object()
+
+
+@pytest.fixture
+def add_entry(client, request):
+    """Insert a JournalEntry into the client's DB. Returns the persisted row.
+
+    Owned by `me` by default (lazily logging the client in), since scoped reads
+    only see the logged-in user's rows. Pass user_id=None for a legacy unowned
+    row, or another user's id for cross-user isolation tests.
+    """
+    def _add(content, *, user_id=_OWNED_BY_ME, source="text", mood_score=None,
+             mood_reasoning=None, timestamp=None, external_id=None):
+        if user_id is _OWNED_BY_ME:
+            user_id = request.getfixturevalue("me").id
         with Session(client.engine) as s:
             entry = JournalEntry(
+                user_id=user_id,
                 source=source,
                 content=content,
                 content_hash=ingestion.compute_hash(content),

@@ -2,9 +2,11 @@ from datetime import date as date_type
 from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from models.journal import JournalEntry, get_session
+from models.journal import JournalEntry, get_session, user_entries
+from models.user import User
+from services.auth import get_current_user
 
 router = APIRouter()
 
@@ -14,13 +16,14 @@ async def get_entries(
     date: date_type,
     source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    """Return all journal entries written on a specific calendar day (UTC)."""
+    """Return the user's journal entries written on a specific calendar day (UTC)."""
     start = datetime.combine(date, time.min)
     end = start + timedelta(days=1)
 
     query = (
-        select(JournalEntry)
+        user_entries(user.id)
         .where(JournalEntry.timestamp >= start, JournalEntry.timestamp < end)
         .order_by(JournalEntry.timestamp.asc())
     )

@@ -75,7 +75,7 @@ describe('fetchTrends', () => {
     const fn = mockFetch({ trends: [{ date: '2026-05-10', score: 0.5 }] })
     const points = await fetchTrends(30, 'goodnotes')
     expect(points).toEqual([{ date: '2026-05-10', score: 0.5 }])
-    expect(fn).toHaveBeenCalledWith(`${BASE}/trends?days=30&source=goodnotes`)
+    expect(fn).toHaveBeenCalledWith(`${BASE}/trends?days=30&source=goodnotes`, { credentials: 'include' })
   })
 
   it('throws on a non-ok response', async () => {
@@ -89,7 +89,7 @@ describe('fetchEntriesByDate', () => {
     const fn = mockFetch({ entries: [{ id: 1, content: 'hi' }] })
     const entries = await fetchEntriesByDate('2026-05-10')
     expect(entries).toEqual([{ id: 1, content: 'hi' }])
-    expect(fn).toHaveBeenCalledWith(`${BASE}/entries?date=2026-05-10`)
+    expect(fn).toHaveBeenCalledWith(`${BASE}/entries?date=2026-05-10`, { credentials: 'include' })
   })
 })
 

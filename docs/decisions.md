@@ -158,3 +158,13 @@
   can't drop a baked-in column constraint via ALTER; harmless while those DBs
   are single-user. New DBs get the composite `(user_id, content_hash)`. The
   constraint swaps at the Postgres migration ("only the constraint swaps").
+- **Reads funnel through one choke point** — `models/journal.py:user_entries(user_id)`
+  is the only place `WHERE user_id = ?` is written; every read route (entries,
+  trends, search, export, synthesis, chat) starts from it and is gated by
+  `get_current_user`. `hybrid_search` takes a **required, keyword-only** `user_id`
+  so a forgotten scope is a TypeError, not a cross-user leak — and a transposed
+  call can't bind it to the adjacent int `limit`. Its SQL candidate set is the
+  isolation boundary: out-of-scope semantic hits drop at fusion, so Chroma
+  metadata filtering (next slice) is defense-in-depth, not load-bearing. The
+  synthesis cache key includes `user_id` so cross-user non-leakage is a property
+  of the key, not an accident of prompt contents.

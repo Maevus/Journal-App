@@ -114,6 +114,162 @@ def test_sync_owner_resolves_by_google_email(session, monkeypatch):
     assert _resolve_sync_owner(session) == user.id
 
 
+# --- read-path isolation (slice 3): every read is gated and user-scoped ---
+
+# Every data-reading route, with a valid request shape — so a failure is the
+# auth gate (401), never validation (422).
+READ_ROUTES = [
+    ("get", "/entries", {"params": {"date": "2026-05-10"}}),
+    ("get", "/trends", {"params": {"days": 30}}),
+    ("post", "/search", {"json": {"query": "anything", "limit": 5}}),
+    ("get", "/export", {"params": {"format": "json"}}),
+    ("get", "/stream/synthesis", {"params": {"days": 0, "limit": 5}}),
+    ("post", "/stream/chat", {"json": {"messages": [{"role": "user", "content": "hi"}]}}),
+]
+
+
+@pytest.mark.parametrize("method,path,kwargs", READ_ROUTES, ids=[r[1] for r in READ_ROUTES])
+def test_read_routes_require_login(client, method, path, kwargs):
+    assert getattr(client, method)(path, **kwargs).status_code == 401
+
+
+def test_entries_show_only_your_own(client, login, add_entry):
+    from datetime import datetime
+
+    alice = login("alice@example.com")
+    add_entry("alice private", user_id=alice.id, timestamp=datetime(2026, 5, 10, 12))
+    bob = login("bob@example.com")  # second login: the client's cookie is now bob's
+    add_entry("bob note", user_id=bob.id, timestamp=datetime(2026, 5, 10, 13))
+
+    entries = client.get("/entries", params={"date": "2026-05-10"}).json()["entries"]
+    assert [e["content"] for e in entries] == ["bob note"]
+
+
+def test_trends_average_only_your_scores(client, login, add_entry):
+    from datetime import datetime
+
+    alice = login("alice@example.com")
+    add_entry("alice day", user_id=alice.id, mood_score=0.9, timestamp=datetime(2026, 5, 10))
+    bob = login("bob@example.com")
+    add_entry("bob day", user_id=bob.id, mood_score=0.1, timestamp=datetime(2026, 5, 10))
+
+    trends = client.get("/trends", params={"days": 0}).json()["trends"]
+    assert trends == [{"date": "2026-05-10", "score": 0.1}]  # bob's average, untouched by alice's 0.9
+
+
+def test_export_contains_only_your_rows(client, login, add_entry):
+    alice = login("alice@example.com")
+    add_entry("alice secret", user_id=alice.id)
+    bob = login("bob@example.com")
+    add_entry("bob note", user_id=bob.id)
+
+    resp = client.get("/export", params={"format": "json"})
+    contents = [row["content"] for row in resp.json()]
+    assert contents == ["bob note"]
+
+
+def test_search_cannot_surface_another_users_entry(client, login, add_entry, monkeypatch):
+    """Even a perfect semantic hit on someone else's entry must not leak:
+    the SQL candidate set is scoped, and fusion drops out-of-scope ids."""
+    import services.retrieval as retrieval
+
+    alice = login("alice@example.com")
+    secret = add_entry("alice secret climbing trip", user_id=alice.id)
+    bob = login("bob@example.com")
+    add_entry("bob cooking dinner", user_id=bob.id)
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, n: [(secret.id, 1.0)])
+
+    results = client.post("/search", json={"query": "climbing", "limit": 5}).json()["results"]
+    assert secret.id not in [r["id"] for r in results]
+
+
+def test_synthesis_prompt_only_sees_your_entries(client, login, add_entry, monkeypatch):
+    """The LLM prompt is the leak surface for synthesis — assert on what gets
+    sent, not just what comes back."""
+    from collections import OrderedDict
+    from datetime import datetime
+
+    import routers.synthesis as synthesis
+
+    monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
+    seen = {}
+
+    async def fake_stream(*args, **kwargs):
+        seen["prompt"] = kwargs["prompt"]
+        yield "ok"
+
+    monkeypatch.setattr(synthesis, "stream_text", fake_stream)
+    alice = login("alice@example.com")
+    add_entry("ALICE_SECRET", user_id=alice.id, timestamp=datetime(2026, 5, 10))
+    bob = login("bob@example.com")
+    add_entry("BOB_NOTE", user_id=bob.id, timestamp=datetime(2026, 5, 11))
+
+    r = client.get("/stream/synthesis", params={"days": 0, "limit": 5})
+
+    assert r.status_code == 200
+    assert "BOB_NOTE" in seen["prompt"]
+    assert "ALICE_SECRET" not in seen["prompt"]
+
+
+def test_chat_retrieval_is_scoped_to_the_logged_in_user(client, login, monkeypatch):
+    """/chat delegates retrieval to hybrid_search — the contract is that it
+    passes the logged-in user's id through."""
+    import routers.chat as chat
+
+    seen = {}
+
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id):
+        seen["user_id"] = user_id
+        return []
+
+    async def fake_condense(history, question):
+        return question
+
+    async def fake_parse(question, **kwargs):
+        return (None, None)
+
+    async def fake_stream(*args, **kwargs):
+        yield "x"
+
+    monkeypatch.setattr(chat, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(chat, "condense_query", fake_condense)
+    monkeypatch.setattr(chat, "parse_date_range", fake_parse)
+    monkeypatch.setattr(chat, "stream_text", fake_stream)
+    bob = login("bob@example.com")
+
+    r = client.post("/stream/chat", json={"messages": [{"role": "user", "content": "q"}]})
+
+    assert r.status_code == 200
+    assert seen["user_id"] == bob.id
+
+
+def test_hybrid_search_is_scoped_to_the_user(session, monkeypatch):
+    """Service-level: the SQL candidate set is the isolation boundary — a
+    top-ranked semantic hit on another user's entry is dropped at fusion."""
+    import services.retrieval as retrieval
+
+    _, [alice_entry] = ingest_entries(["climbing rocks"], "text", session, user_id=1)
+    _, [bob_entry] = ingest_entries(["climbing walls"], "text", session, user_id=2)
+    monkeypatch.setattr(
+        retrieval, "search_similar",
+        lambda q, n: [(alice_entry.id, 1.0), (bob_entry.id, 0.9)],
+    )
+
+    hits = retrieval.hybrid_search(session, "climbing", 5, user_id=2)
+    assert [e.id for e, _ in hits] == [bob_entry.id]
+
+
+def test_legacy_unowned_rows_are_invisible_until_backfilled(client, me, add_entry):
+    """NULL user_id rows (pre-multi-user, or startup sync before the owner
+    logs in) don't belong to anyone — scripts/backfill_owner.py is the bridge."""
+    from datetime import datetime
+
+    add_entry("pre-multi-user row", user_id=None, timestamp=datetime(2026, 5, 10, 12))
+
+    entries = client.get("/entries", params={"date": "2026-05-10"}).json()["entries"]
+    assert entries == []
+
+
 def test_source_edit_update_is_user_scoped(session):
     """Same source + external_id from two users must never cross-update:
     the edited-at-source update path has to match within the owner only."""

@@ -9,10 +9,12 @@ from pathlib import Path
 import yaml
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from clock import utcnow_naive
-from models.journal import JournalEntry, get_session
+from models.journal import JournalEntry, get_session, user_entries
+from models.user import User
+from services.auth import get_current_user
 from services.llm_client import DEFAULT_MODEL, stream_text
 
 logger = logging.getLogger(__name__)
@@ -36,9 +38,12 @@ def _load_prompt() -> dict:
         return yaml.safe_load(fh)
 
 
-def _cache_key(model: str, max_tokens: int, system: str, user_prompt: str) -> str:
+def _cache_key(user_id: int, model: str, max_tokens: int, system: str, user_prompt: str) -> str:
+    # user_id is in the key even though the rendered prompt already embeds the
+    # user's own entries: not-leaking across users should be a property of the
+    # key itself, not an accident of prompt contents.
     version = _load_prompt().get("version", "?")
-    raw = "\x00".join([str(version), model, str(max_tokens), system, user_prompt])
+    raw = "\x00".join([str(version), str(user_id), model, str(max_tokens), system, user_prompt])
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -62,8 +67,9 @@ async def synthesis(
     days: int = 0,  # calendar window; 0 = all time
     source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    query = select(JournalEntry).order_by(JournalEntry.timestamp.asc())
+    query = user_entries(user.id).order_by(JournalEntry.timestamp.asc())
     if days > 0:
         # naive UTC to match JournalEntry.timestamp (stored naive); an aware
         # datetime would break the >= comparison. See clock.utcnow_naive.
@@ -96,7 +102,7 @@ async def synthesis(
     user_prompt = cfg["user_template"].format(entries=entries_text)
     model = cfg.get("model", DEFAULT_MODEL)
     max_tokens = cfg.get("max_tokens", 1024)
-    key = _cache_key(model, max_tokens, cfg["system"], user_prompt)
+    key = _cache_key(user.id, model, max_tokens, cfg["system"], user_prompt)
 
     async def event_stream():
         cached = _cache_get(key)

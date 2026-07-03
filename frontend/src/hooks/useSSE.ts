@@ -26,7 +26,9 @@ export function useSSE(url: string): UseSSEReturn {
     setError(null)
     setIsStreaming(true)
 
-    const es = new EventSource(url)
+    // withCredentials is EventSource's spelling of `credentials: 'include'` —
+    // the synthesis stream is auth-gated, so the session cookie must ride along.
+    const es = new EventSource(url, { withCredentials: true })
     sourceRef.current = es
 
     es.onmessage = (event: MessageEvent<string>) => {

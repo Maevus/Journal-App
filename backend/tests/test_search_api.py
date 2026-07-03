@@ -9,7 +9,7 @@ import services.retrieval as retrieval
 RESULT_KEYS = {"id", "content", "source", "timestamp", "similarity_score", "external_id"}
 
 
-def test_empty_db_returns_no_results(client):
+def test_empty_db_returns_no_results(client, me):
     # Short-circuits before touching Chroma.
     assert client.post("/search", json={"query": "anything", "limit": 5}).json() == {"results": []}
 

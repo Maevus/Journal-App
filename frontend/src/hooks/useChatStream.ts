@@ -70,6 +70,7 @@ export function useChatStream(): UseChatStreamReturn {
       try {
         const res = await fetch(chatStreamUrl(), {
           method: 'POST',
+          credentials: 'include', // chat is auth-gated: retrieval is scoped to the session's user
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ messages, limit }),
           signal: ctrl.signal,

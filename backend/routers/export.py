@@ -4,9 +4,11 @@ import json
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from sqlmodel import Session, select
+from sqlmodel import Session
 
-from models.journal import JournalEntry, get_session
+from models.journal import JournalEntry, get_session, user_entries
+from models.user import User
+from services.auth import get_current_user
 
 router = APIRouter()
 
@@ -39,16 +41,17 @@ async def export_entries(
     format: str = "csv",  # "csv" | "json"
     source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
-    """Export all journal entries (optionally filtered by source) for download as
-    CSV or JSON, ordered by timestamp ascending."""
+    """Export the user's journal entries (optionally filtered by source) for
+    download as CSV or JSON, ordered by timestamp ascending."""
     if format not in ("csv", "json"):
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported format {format!r}; expected 'csv' or 'json'.",
         )
 
-    query = select(JournalEntry).order_by(JournalEntry.timestamp.asc())
+    query = user_entries(user.id).order_by(JournalEntry.timestamp.asc())
     if source:
         query = query.where(JournalEntry.source == source)
     entries = session.exec(query).all()

@@ -30,14 +30,14 @@ def test_source_filter(client, add_entry):
     assert trends == [{"date": "2026-05-10", "score": 0.9}]
 
 
-def test_empty_db_returns_sinusoid_stub(client):
+def test_empty_db_returns_sinusoid_stub(client, me):
     # No scored entries and no source filter → deterministic stub so the chart renders.
     trends = client.get("/trends", params={"days": 30}).json()["trends"]
     assert len(trends) == 30
     assert all(0.0 <= t["score"] <= 1.0 for t in trends)
 
 
-def test_empty_db_with_source_filter_returns_no_stub(client):
+def test_empty_db_with_source_filter_returns_no_stub(client, me):
     # A fake sinusoid for a specific source would be misleading → honest empty.
     trends = client.get("/trends", params={"days": 30, "source": "goodnotes"}).json()["trends"]
     assert trends == []

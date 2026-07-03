@@ -11,10 +11,10 @@ from typing import Optional
 
 from pydantic import BaseModel
 from rank_bm25 import BM25Okapi
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from clock import utcnow_naive
-from models.journal import JournalEntry
+from models.journal import JournalEntry, user_entries
 from services.embeddings import search_similar
 from services.llm_client import structured_output
 
@@ -43,14 +43,24 @@ def hybrid_search(
     limit: int = 10,
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
+    *,
+    user_id: int,
 ) -> list[tuple[JournalEntry, float]]:
-    """Return [(entry, score)] ranked by 0.7·semantic + 0.3·BM25, top `limit`.
+    """Return [(entry, score)] of `user_id`'s entries ranked by
+    0.7·semantic + 0.3·BM25, top `limit`.
+
+    `user_id` is required and keyword-only: retrieval over a journal must always
+    say whose, so a forgotten argument fails loudly instead of searching everyone,
+    and a transposed one can't bind to the adjacent int `limit` (ADR 0003). The
+    SQL candidate set is the isolation boundary — semantic hits on other users'
+    rows are dropped at fusion, so isolation holds even before Chroma metadata
+    carries user_id.
 
     `start`/`end` (naive UTC, half-open `[start, end)`) restrict the candidate
     set to that window before fusion, so a time-scoped question can't be crowded
     out by more-similar entries from other dates. Either bound may be omitted.
     """
-    stmt = select(JournalEntry)
+    stmt = user_entries(user_id)
     if start is not None:
         stmt = stmt.where(JournalEntry.timestamp >= start)
     if end is not None:

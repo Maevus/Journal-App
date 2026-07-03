@@ -97,7 +97,7 @@ def test_export_unknown_format_400(client, add_entry):
     assert resp.status_code == 400
 
 
-def test_export_empty_csv(client):
+def test_export_empty_csv(client, me):
     resp = client.get("/export", params={"format": "csv"})
     assert resp.status_code == 200
 
@@ -105,7 +105,7 @@ def test_export_empty_csv(client):
     assert rows == []  # header only, no data rows
 
 
-def test_export_empty_json(client):
+def test_export_empty_json(client, me):
     resp = client.get("/export", params={"format": "json"})
     assert resp.status_code == 200
     assert json.loads(resp.text) == []

@@ -53,6 +53,7 @@ export async function searchEntries(
 ): Promise<{ results: SearchResult[] }> {
   const res = await fetch(`${BASE_URL}/search`, {
     method: 'POST',
+    credentials: 'include', // search is auth-gated and scoped to the session's user
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, limit }),
   })
@@ -64,7 +65,7 @@ export async function fetchTrends(days = 30, source: string | null = null): Prom
   // days=0 → all time; source=null → all sources
   const params = new URLSearchParams({ days: String(days) })
   if (source) params.set('source', source)
-  const res = await fetch(`${BASE_URL}/trends?${params}`)
+  const res = await fetch(`${BASE_URL}/trends?${params}`, { credentials: 'include' })
   if (!res.ok) throw new Error(`Trends failed: ${res.statusText}`)
   const data = (await res.json()) as { trends: TrendPoint[] }
   return data.trends
@@ -77,7 +78,7 @@ export async function fetchEntriesByDate(
   // date: ISO "YYYY-MM-DD"; source=null → all sources
   const params = new URLSearchParams({ date })
   if (source) params.set('source', source)
-  const res = await fetch(`${BASE_URL}/entries?${params}`)
+  const res = await fetch(`${BASE_URL}/entries?${params}`, { credentials: 'include' })
   if (!res.ok) throw new Error(`Entries failed: ${res.statusText}`)
   const data = (await res.json()) as { entries: DayEntry[] }
   return data.entries
@@ -142,7 +143,8 @@ export async function logout(): Promise<void> {
 }
 
 export function exportUrl(format: 'csv' | 'json', source: string | null = null): string {
-  // source=null → all sources. Used as an <a href download> target.
+  // source=null → all sources. Used as an <a href download> target — a top-level
+  // navigation, so the SameSite=Lax session cookie is sent without any fetch options.
   const params = new URLSearchParams({ format })
   if (source) params.set('source', source)
   return `${BASE_URL}/export?${params}`

@@ -8,8 +8,9 @@ import services.retrieval as retrieval
 from models.journal import JournalEntry
 
 
-def _add(session, content, source="text", timestamp=None):
+def _add(session, content, source="text", timestamp=None, user_id=1):
     entry = JournalEntry(
+        user_id=user_id,
         source=source,
         content=content,
         content_hash=content,
@@ -22,7 +23,7 @@ def _add(session, content, source="text", timestamp=None):
 
 
 def test_empty_db_returns_empty(session):
-    assert retrieval.hybrid_search(session, "anything", 5) == []
+    assert retrieval.hybrid_search(session, "anything", 5, user_id=1) == []
 
 
 def test_bm25_surfaces_keyword_without_semantic(session, monkeypatch):
@@ -30,7 +31,7 @@ def test_bm25_surfaces_keyword_without_semantic(session, monkeypatch):
     _add(session, "quiet reading evening")
     monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [])
 
-    hits = retrieval.hybrid_search(session, "climbing", 5)
+    hits = retrieval.hybrid_search(session, "climbing", 5, user_id=1)
     assert hits[0][0].id == a.id
 
 
@@ -40,7 +41,7 @@ def test_semantic_signal_ranks_first(session, monkeypatch):
     # Query matches nothing textually → ranking comes purely from the stub.
     monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [(a.id, 1.0)])
 
-    hits = retrieval.hybrid_search(session, "zzz", 5)
+    hits = retrieval.hybrid_search(session, "zzz", 5, user_id=1)
     assert hits[0][0].id == a.id
 
 
@@ -49,7 +50,7 @@ def test_respects_limit(session, monkeypatch):
         _add(session, f"entry number {i}")
     monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [])
 
-    hits = retrieval.hybrid_search(session, "entry", 2)
+    hits = retrieval.hybrid_search(session, "entry", 2, user_id=1)
     assert len(hits) == 2
 
 
@@ -63,7 +64,7 @@ def test_date_window_excludes_out_of_range_entries(session, monkeypatch):
 
     hits = retrieval.hybrid_search(
         session, "energy concerta", 5,
-        start=datetime(2026, 5, 1), end=datetime(2026, 6, 1),
+        start=datetime(2026, 5, 1), end=datetime(2026, 6, 1), user_id=1,
     )
     ids = [entry.id for entry, _ in hits]
     assert in_window.id in ids

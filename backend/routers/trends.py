@@ -2,10 +2,12 @@ from collections import defaultdict
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from clock import utcnow_naive
-from models.journal import JournalEntry, get_session
+from models.journal import JournalEntry, get_session, user_entries
+from models.user import User
+from services.auth import get_current_user
 
 router = APIRouter()
 
@@ -15,9 +17,10 @@ async def get_trends(
     days: int = 30,  # calendar window; 0 = all time
     source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
     session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     query = (
-        select(JournalEntry)
+        user_entries(user.id)
         .where(JournalEntry.mood_score.isnot(None))  # type: ignore[arg-type]
         .order_by(JournalEntry.timestamp.asc())
     )

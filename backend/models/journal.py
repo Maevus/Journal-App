@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Generator, Optional
 
 from sqlalchemy import UniqueConstraint, text
-from sqlmodel import Field, Session, SQLModel, create_engine
+from sqlmodel import Field, Session, SQLModel, create_engine, select
 
 from clock import utcnow_naive
 from config import DATABASE_URL
@@ -37,6 +37,16 @@ class JournalEntry(SQLModel, table=True):
 def get_session() -> Generator:
     with Session(engine) as session:
         yield session
+
+
+def user_entries(user_id: int):
+    """Base query for everything a user can read — the isolation choke point
+    (ADR 0003). Every read path starts from this SELECT and chains its own
+    filters, so `WHERE user_id = ?` is written exactly once. Legacy unowned
+    rows (user_id NULL: pre-multi-user data, startup sync before its owner
+    logs in) match no user by design — scripts/backfill_owner.py is the bridge.
+    """
+    return select(JournalEntry).where(JournalEntry.user_id == user_id)
 
 
 def ensure_schema() -> None:

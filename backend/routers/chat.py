@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from sqlmodel import Session
 
 from models.journal import get_session
+from models.user import User
+from services.auth import get_current_user
 from services.llm_client import DEFAULT_MODEL, stream_text
 from services.retrieval import condense_query, hybrid_search, parse_date_range
 
@@ -50,6 +52,7 @@ class ChatRequest(BaseModel):
 async def chat(
     body: ChatRequest,
     session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
 ):
     """Multi-turn RAG over the whole journal. The client holds the conversation
     and POSTs the full message history each turn; the server stays stateless.
@@ -87,12 +90,13 @@ async def chat(
     # Time-scoped questions constrain retrieval to that window; non-scoped get
     # (None, None) and retrieve over the whole journal.
     start, end = await parse_date_range(standalone)
-    hits = hybrid_search(session, standalone, body.limit, start=start, end=end)
+    hits = hybrid_search(session, standalone, body.limit, start=start, end=end,
+                         user_id=user.id)
     # A window that matches nothing (a period the journal doesn't cover, or a
     # mis-parse) shouldn't make the bot claim the journal is empty — fall back to
-    # unscoped retrieval so it still answers from whatever exists.
+    # time-unscoped (still user-scoped) retrieval so it answers from what exists.
     if not hits and (start is not None or end is not None):
-        hits = hybrid_search(session, standalone, body.limit)
+        hits = hybrid_search(session, standalone, body.limit, user_id=user.id)
 
     cfg = _load_prompt()
 
