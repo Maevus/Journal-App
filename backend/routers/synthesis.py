@@ -120,6 +120,7 @@ async def synthesis(
             system=cfg["system"],
             model=model,
             max_tokens=max_tokens,
+            user_id=user.id,
         ):
             chunks.append(token)
             # JSON-encode each token so newlines in the payload are safe in SSE

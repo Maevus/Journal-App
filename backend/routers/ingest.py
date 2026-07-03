@@ -67,6 +67,6 @@ async def ingest(
         )
 
     for entry in new_entries:
-        background_tasks.add_task(score_mood_background, entry.id, entry.content)
+        background_tasks.add_task(score_mood_background, entry.id, entry.content, user_id=entry.user_id)
 
     return stats

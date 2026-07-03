@@ -271,10 +271,13 @@ class _MoodScore(BaseModel):
     reasoning: str
 
 
-async def score_mood_background(entry_id: int, content: str) -> None:
+async def score_mood_background(entry_id: int, content: str, *, user_id: Optional[int]) -> None:
     """
     Background task: call the LLM for a mood score and write it back to the DB.
     Failures are silently swallowed — scoring is best-effort.
+
+    `user_id` is the entry's owner — scoring their entry spends money on their
+    behalf. None for unowned startup-sync rows (metered as system work).
     """
     try:
         from services.llm_client import structured_output
@@ -291,6 +294,7 @@ async def score_mood_background(entry_id: int, content: str) -> None:
             # 256 still truncated long reasonings (invalid tool JSON → validation
             # error), so 512 for headroom.
             max_tokens=512,
+            user_id=user_id,
         )
 
         with Session(engine) as session:

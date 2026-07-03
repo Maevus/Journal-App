@@ -177,3 +177,23 @@
   can't hold NULL, and an absent key matches no filter, mirroring SQL's invisible
   NULL rows. `scripts/backfill_owner.py` stamps both stores from SQL ownership
   (SQL is the source of truth), so one idempotent command bridges old data.
+
+## Freemium phase (2026-07-03)
+
+- **Launch posture: the free tier costs Maeve $0** — the demo (with its synthesis
+  cache) is the try-it experience; real accounts get local features free (search
+  is ONNX + BM25, no API), and LLM features unlock with a BYO key. Flipping to a
+  subsidized budget later is a config change, not a redesign. Provider-shaped but
+  Anthropic-first: `model` stays a plain string, pricing stays data-driven, the
+  key store gets a `provider` column — multi-provider is a later feature behind
+  the same two llm_client functions, not a prerequisite.
+- **Every LLM call persists one attributed `LLMUsage` row** — the meter lives in
+  `llm_client._log_usage`, the choke point both LLM entry points already funnel
+  through, so an unmetered call is structurally impossible (the spend-side twin
+  of `user_entries`). `stream_text`/`structured_output` take the house-pattern
+  required keyword-only `user_id` (explicit `None` = system work: metered for
+  visibility, charged to nobody). Attribution rides the natural chain: routes
+  bill the logged-in user, mood scoring bills the entry's owner, chat's
+  condense/date-parse bill the asking user. The meter write never kills the call
+  it's metering (tokens already delivered — log loudly, move on); quota (F2)
+  fails closed instead, but runs *before* the money is spent.

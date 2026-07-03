@@ -5,10 +5,14 @@ exponential backoff (max 3 retries), per-call token + cost logging.
 import asyncio
 import logging
 import os
-from typing import AsyncGenerator, Type, TypeVar
+from typing import AsyncGenerator, Optional, Type, TypeVar
 
 import anthropic
 from pydantic import BaseModel
+from sqlmodel import Session
+
+from models.journal import engine
+from models.usage import LLMUsage
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -36,13 +40,35 @@ def _async_client() -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 
-def _log_usage(model: str, input_tokens: int, output_tokens: int) -> None:
+def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Optional[int]) -> None:
+    """Meter one finished LLM call: operator log line + a persisted LLMUsage row.
+
+    Both LLM entry points end here, so this is the spend choke point — an
+    unmetered call is structurally impossible (ADR 0003 freemium). The meter
+    write must never kill the call it's metering: the tokens are already
+    delivered (and paid for), so a failed INSERT logs loudly and moves on.
+    Quota enforcement (F2) fails closed instead — but it runs BEFORE the call.
+    """
     input_cost, output_cost = _PRICING.get(model, _DEFAULT_PRICING)
     cost = input_tokens * input_cost + output_tokens * output_cost
     print(
-        f"[llm] model={model} input_tokens={input_tokens} "
+        f"[llm] user={user_id} model={model} input_tokens={input_tokens} "
         f"output_tokens={output_tokens} cost=${cost:.5f}"
     )
+    try:
+        with Session(engine) as session:
+            session.add(
+                LLMUsage(
+                    user_id=user_id,
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                )
+            )
+            session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("usage meter write failed (the LLM call itself succeeded)")
 
 
 async def stream_text(
@@ -52,6 +78,8 @@ async def stream_text(
     max_tokens: int = 1024,
     max_retries: int = 3,
     messages: list[dict] | None = None,
+    *,
+    user_id: Optional[int],
 ) -> AsyncGenerator[str, None]:
     """
     Yield text tokens from the LLM with exponential-backoff retry.
@@ -59,6 +87,10 @@ async def stream_text(
     Pass either a single `prompt` (wrapped as one user turn) or a full
     `messages` history (for multi-turn callers like chat). Exactly one of the
     two must be given; `messages` wins if both are present.
+
+    `user_id` is required keyword-only (the house pattern): every call must
+    state who it's billed to. Explicit None = system work — metered for
+    visibility, charged to nobody's quota.
 
     Retry fires on connection/rate-limit errors before the first token is
     delivered.  Mid-stream errors propagate without retry — tokens already
@@ -82,7 +114,7 @@ async def stream_text(
                 async for chunk in stream.text_stream:
                     yield chunk
                 msg = await stream.get_final_message()
-                _log_usage(model, msg.usage.input_tokens, msg.usage.output_tokens)
+                _log_usage(model, msg.usage.input_tokens, msg.usage.output_tokens, user_id=user_id)
                 return
         except _RETRYABLE as exc:
             last_err = exc
@@ -107,10 +139,14 @@ async def structured_output(
     model: str = DEFAULT_MODEL,
     max_tokens: int = 512,
     max_retries: int = 3,
+    *,
+    user_id: Optional[int],
 ) -> T:
     """
     Return a Pydantic model instance validated against the LLM's tool-use output.
     Retries with exponential backoff on transient errors.
+
+    `user_id`: required keyword-only billing attribution — see stream_text.
     """
     client = _async_client()
     tool_name = "structured_extract"
@@ -130,7 +166,9 @@ async def structured_output(
                 tools=[tool_def],
                 tool_choice={"type": "tool", "name": tool_name},
             )
-            _log_usage(model, response.usage.input_tokens, response.usage.output_tokens)
+            _log_usage(
+                model, response.usage.input_tokens, response.usage.output_tokens, user_id=user_id
+            )
 
             for block in response.content:
                 if block.type == "tool_use" and block.name == tool_name:

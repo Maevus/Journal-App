@@ -25,7 +25,7 @@ def _fake_parse_factory(window=(None, None)):
 
 
 def _fake_condense_factory(rewritten=None, seen=None):
-    async def fake_condense(history, question):
+    async def fake_condense(history, question, *, user_id=None):
         if seen is not None:
             seen.update(history=history, question=question)
         return rewritten if rewritten is not None else question

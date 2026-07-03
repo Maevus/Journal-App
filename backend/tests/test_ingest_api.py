@@ -13,7 +13,7 @@ async def _noop(*args, **kwargs):
 def test_ingests_text_entries_and_schedules_scoring(client, login, monkeypatch):
     scored = []
 
-    async def fake_score(entry_id, content):
+    async def fake_score(entry_id, content, *, user_id=None):
         scored.append(entry_id)
 
     monkeypatch.setattr(ingest_router, "score_mood_background", fake_score)

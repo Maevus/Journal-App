@@ -75,16 +75,16 @@ def _conn_error():
 # --- _log_usage / _async_client --------------------------------------------
 
 def test_log_usage_prints_cost(capsys):
-    llm._log_usage("claude-opus-4-8", 1000, 100)
+    llm._log_usage("claude-opus-4-8", 1000, 100, user_id=1)
     out = capsys.readouterr().out
     assert "input_tokens=1000" in out and "cost=$" in out
 
 
 def test_log_usage_prices_per_model(capsys):
     """A cheaper model logs a lower cost than opus for identical token counts."""
-    llm._log_usage("claude-opus-4-8", 1000, 1000)
+    llm._log_usage("claude-opus-4-8", 1000, 1000, user_id=1)
     opus = capsys.readouterr().out
-    llm._log_usage("claude-haiku-4-5", 1000, 1000)
+    llm._log_usage("claude-haiku-4-5", 1000, 1000, user_id=1)
     haiku = capsys.readouterr().out
 
     def _cost(line):
@@ -94,9 +94,9 @@ def test_log_usage_prices_per_model(capsys):
 
 
 def test_log_usage_unknown_model_falls_back_to_default(capsys):
-    llm._log_usage("some-future-model", 1000, 1000)
+    llm._log_usage("some-future-model", 1000, 1000, user_id=1)
     unknown = capsys.readouterr().out
-    llm._log_usage("claude-opus-4-8", 1000, 1000)
+    llm._log_usage("claude-opus-4-8", 1000, 1000, user_id=1)
     opus = capsys.readouterr().out
     assert unknown.split("cost=$")[1] == opus.split("cost=$")[1]
 
@@ -116,7 +116,7 @@ def test_async_client_uses_env_key(monkeypatch):
 async def test_stream_text_yields_tokens(monkeypatch):
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["Hello", " world"]))
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
-    out = [tok async for tok in llm.stream_text("prompt")]
+    out = [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert out == ["Hello", " world"]
     assert msgs.stream_calls == 1
 
@@ -125,7 +125,7 @@ async def test_stream_text_retries_on_connection_error(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     msgs = _FakeMessages(stream_side_effect=[_conn_error, lambda: _FakeTextStream(["ok"])])
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
-    out = [tok async for tok in llm.stream_text("prompt")]
+    out = [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert out == ["ok"]
     assert msgs.stream_calls == 2  # retried once
 
@@ -145,7 +145,7 @@ async def test_structured_output_extracts_tool_use(monkeypatch):
     block = SimpleNamespace(type="tool_use", name="structured_extract", input={"score": 0.8, "reasoning": "x"})
     msgs = _FakeMessages(create_side_effect=[_resp(block)])
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
-    result = await llm.structured_output("prompt", _Schema)
+    result = await llm.structured_output("prompt", _Schema, user_id=1)
     assert result.score == 0.8 and result.reasoning == "x"
 
 
@@ -153,7 +153,7 @@ async def test_structured_output_raises_without_tool_use(monkeypatch):
     msgs = _FakeMessages(create_side_effect=[_resp(SimpleNamespace(type="text"))])
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
     with pytest.raises(ValueError):
-        await llm.structured_output("prompt", _Schema)
+        await llm.structured_output("prompt", _Schema, user_id=1)
 
 
 async def test_structured_output_retries(monkeypatch):
@@ -163,7 +163,7 @@ async def test_structured_output_retries(monkeypatch):
         create_side_effect=[anthropic.APIConnectionError(request=httpx.Request("POST", "http://t")), _resp(block)]
     )
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
-    result = await llm.structured_output("prompt", _Schema)
+    result = await llm.structured_output("prompt", _Schema, user_id=1)
     assert result.score == 0.5
     assert msgs.create_calls == 2
 
@@ -173,7 +173,7 @@ async def test_stream_text_raises_after_exhausting_retries(monkeypatch):
     msgs = _FakeMessages(stream_side_effect=[_conn_error, _conn_error, _conn_error])
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
     with pytest.raises(anthropic.APIConnectionError):
-        [tok async for tok in llm.stream_text("prompt")]
+        [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert msgs.stream_calls == 3
 
 
@@ -186,5 +186,5 @@ async def test_structured_output_raises_after_exhausting_retries(monkeypatch):
     msgs = _FakeMessages(create_side_effect=[err(), err(), err()])
     monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
     with pytest.raises(anthropic.APIConnectionError):
-        await llm.structured_output("prompt", _Schema)
+        await llm.structured_output("prompt", _Schema, user_id=1)
     assert msgs.create_calls == 3

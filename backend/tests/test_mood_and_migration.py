@@ -60,7 +60,7 @@ async def test_score_mood_writes_and_clamps(mood_engine, monkeypatch):
         return ingestion._MoodScore(score=1.5, reasoning="very upbeat")
 
     monkeypatch.setattr("services.llm_client.structured_output", fake)
-    await ingestion.score_mood_background(eid, "x")
+    await ingestion.score_mood_background(eid, "x", user_id=1)
 
     with Session(mood_engine) as s:
         e = s.get(JournalEntry, eid)
@@ -75,7 +75,7 @@ async def test_score_mood_swallows_errors(mood_engine, monkeypatch):
         raise RuntimeError("api down")
 
     monkeypatch.setattr("services.llm_client.structured_output", boom)
-    await ingestion.score_mood_background(eid, "x")  # must not raise
+    await ingestion.score_mood_background(eid, "x", user_id=1)  # must not raise
 
     with Session(mood_engine) as s:
         e = s.get(JournalEntry, eid)

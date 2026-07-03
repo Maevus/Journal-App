@@ -9,7 +9,27 @@ from sqlmodel import Session, SQLModel, create_engine
 
 import services.ingestion as ingestion
 from models.journal import JournalEntry
+from models.usage import LLMUsage  # noqa: F401 — registers the usage table for create_all
 from models.user import User  # noqa: F401 — registers the users table for create_all
+
+
+@pytest.fixture(autouse=True)
+def meter_db(monkeypatch):
+    """llm_client persists a usage row for every LLM call through its own
+    engine — point it at a fresh in-memory DB for every test so metering can
+    never write to the real journal.db. Meter tests request this fixture by
+    name to assert on the rows."""
+    import services.llm_client as llm_client
+
+    eng = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    SQLModel.metadata.create_all(eng)
+    # raising=False: nothing to patch until llm_client grows its engine — the
+    # meter tests themselves are what fail red, not every test in the suite.
+    monkeypatch.setattr(llm_client, "engine", eng, raising=False)
+    yield eng
+    eng.dispose()
 
 
 @pytest.fixture

@@ -40,10 +40,10 @@ async def _startup_keep_sync() -> None:
     try:
         with Session(engine) as session:
             stats, new_entries = await ingest_keep(session)
-            to_score = [(e.id, e.content) for e in new_entries]
+            to_score = [(e.id, e.content, e.user_id) for e in new_entries]
         logger.info("Startup Keep sync: %s", stats)
-        for entry_id, content in to_score:
-            asyncio.create_task(score_mood_background(entry_id, content))
+        for entry_id, content, owner_id in to_score:
+            asyncio.create_task(score_mood_background(entry_id, content, user_id=owner_id))
     except Exception:  # noqa: BLE001
         logger.exception("Startup Keep sync failed; continuing without it")
 
@@ -57,10 +57,10 @@ async def _scheduled_goodnotes_scan() -> None:
     try:
         with Session(engine) as session:
             stats, new_entries = await ingest_goodnotes(session)
-            to_score = [(e.id, e.content) for e in new_entries]
+            to_score = [(e.id, e.content, e.user_id) for e in new_entries]
         logger.info("Scheduled GoodNotes scan: %s", stats)
-        for entry_id, content in to_score:
-            asyncio.create_task(score_mood_background(entry_id, content))
+        for entry_id, content, owner_id in to_score:
+            asyncio.create_task(score_mood_background(entry_id, content, user_id=owner_id))
     except Exception:  # noqa: BLE001
         logger.exception("Scheduled GoodNotes scan failed; continuing without it")
 

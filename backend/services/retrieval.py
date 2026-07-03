@@ -124,7 +124,7 @@ _DATE_PARSE_SYSTEM = (
 
 
 async def parse_date_range(
-    question: str, *, today=None
+    question: str, *, today=None, user_id: Optional[int]
 ) -> tuple[Optional[datetime], Optional[datetime]]:
     """Resolve a question's time scope to a half-open `[start, end)` window.
 
@@ -142,6 +142,7 @@ async def parse_date_range(
             system=_DATE_PARSE_SYSTEM,
             model=_DATE_PARSE_MODEL,
             max_tokens=128,
+            user_id=user_id,  # date parsing spends money on the asking user's behalf
         )
     except Exception as exc:  # never let date parsing break a chat answer
         logger.warning("date-range parse failed (%s); retrieving unscoped", type(exc).__name__)
@@ -181,7 +182,7 @@ _CONDENSE_SYSTEM = (
 )
 
 
-async def condense_query(history: list[dict], question: str) -> str:
+async def condense_query(history: list[dict], question: str, *, user_id: Optional[int]) -> str:
     """Rewrite a follow-up `question` into a standalone retrieval query.
 
     `history` is the prior conversation as a list of `{role, content}` messages
@@ -202,6 +203,7 @@ async def condense_query(history: list[dict], question: str) -> str:
             system=_CONDENSE_SYSTEM,
             model=_CONDENSE_MODEL,
             max_tokens=256,
+            user_id=user_id,
         )
     except Exception as exc:  # never let condensation break a chat answer
         logger.warning("query condense failed (%s); using raw question", type(exc).__name__)

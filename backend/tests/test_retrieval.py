@@ -85,7 +85,7 @@ async def test_parse_date_range_builds_exclusive_window(monkeypatch):
         _fake_structured(retrieval.DateRange(
             is_time_scoped=True, start_date="2026-05-01", end_date="2026-06-30")),
     )
-    start, end = await retrieval.parse_date_range("energy in May and June")
+    start, end = await retrieval.parse_date_range("energy in May and June", user_id=1)
     assert start == datetime(2026, 5, 1)
     assert end == datetime(2026, 7, 1)  # inclusive end_date + 1 day -> exclusive
 
@@ -95,7 +95,7 @@ async def test_parse_date_range_none_when_not_scoped(monkeypatch):
         retrieval, "structured_output",
         _fake_structured(retrieval.DateRange(is_time_scoped=False)),
     )
-    assert await retrieval.parse_date_range("what did I write about climbing") == (None, None)
+    assert await retrieval.parse_date_range("what did I write about climbing", user_id=1) == (None, None)
 
 
 async def test_parse_date_range_swallows_llm_errors(monkeypatch):
@@ -103,7 +103,7 @@ async def test_parse_date_range_swallows_llm_errors(monkeypatch):
         raise RuntimeError("api down")
 
     monkeypatch.setattr(retrieval, "structured_output", boom)
-    assert await retrieval.parse_date_range("energy in May") == (None, None)
+    assert await retrieval.parse_date_range("energy in May", user_id=1) == (None, None)
 
 
 async def test_parse_date_range_ignores_bad_iso(monkeypatch):
@@ -112,7 +112,7 @@ async def test_parse_date_range_ignores_bad_iso(monkeypatch):
         _fake_structured(retrieval.DateRange(
             is_time_scoped=True, start_date="May 2026", end_date="not-a-date")),
     )
-    assert await retrieval.parse_date_range("energy in May") == (None, None)
+    assert await retrieval.parse_date_range("energy in May", user_id=1) == (None, None)
 
 
 async def test_parse_date_range_rejects_inverted_window(monkeypatch):
@@ -122,7 +122,7 @@ async def test_parse_date_range_rejects_inverted_window(monkeypatch):
         _fake_structured(retrieval.DateRange(
             is_time_scoped=True, start_date="2026-06-01", end_date="2026-05-01")),
     )
-    assert await retrieval.parse_date_range("energy in June then May") == (None, None)
+    assert await retrieval.parse_date_range("energy in June then May", user_id=1) == (None, None)
 
 
 async def test_parse_date_range_rejects_time_bearing_iso(monkeypatch):
@@ -132,7 +132,7 @@ async def test_parse_date_range_rejects_time_bearing_iso(monkeypatch):
         _fake_structured(retrieval.DateRange(
             is_time_scoped=True, start_date="2026-05-01T12:00:00", end_date="2026-05-31")),
     )
-    assert await retrieval.parse_date_range("energy in May") == (None, None)
+    assert await retrieval.parse_date_range("energy in May", user_id=1) == (None, None)
 
 
 # --- condense_query (LLM stubbed) ---
@@ -143,7 +143,7 @@ async def test_condense_query_first_turn_skips_llm(monkeypatch):
         raise AssertionError("structured_output should not be called on the first turn")
 
     monkeypatch.setattr(retrieval, "structured_output", boom)
-    assert await retrieval.condense_query([], "how was my mood in May?") == "how was my mood in May?"
+    assert await retrieval.condense_query([], "how was my mood in May?", user_id=1) == "how was my mood in May?"
 
 
 async def test_condense_query_rewrites_followup(monkeypatch):
@@ -155,7 +155,7 @@ async def test_condense_query_rewrites_followup(monkeypatch):
         {"role": "user", "content": "how was my mood in May?"},
         {"role": "assistant", "content": "Steady in May."},
     ]
-    assert await retrieval.condense_query(history, "and June?") == "how was my mood in June?"
+    assert await retrieval.condense_query(history, "and June?", user_id=1) == "how was my mood in June?"
 
 
 async def test_condense_query_degrades_to_raw_on_error(monkeypatch):
@@ -164,7 +164,7 @@ async def test_condense_query_degrades_to_raw_on_error(monkeypatch):
 
     monkeypatch.setattr(retrieval, "structured_output", boom)
     history = [{"role": "user", "content": "earlier"}]
-    assert await retrieval.condense_query(history, "and June?") == "and June?"
+    assert await retrieval.condense_query(history, "and June?", user_id=1) == "and June?"
 
 
 async def test_condense_query_falls_back_when_blank(monkeypatch):
@@ -173,4 +173,4 @@ async def test_condense_query_falls_back_when_blank(monkeypatch):
         _fake_structured(retrieval.StandaloneQuery(standalone_query="   ")),
     )
     history = [{"role": "user", "content": "earlier"}]
-    assert await retrieval.condense_query(history, "and June?") == "and June?"
+    assert await retrieval.condense_query(history, "and June?", user_id=1) == "and June?"

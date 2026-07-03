@@ -85,11 +85,11 @@ async def chat(
         for m in messages[:-1]
         if m.content.strip()
     ]
-    standalone = await condense_query(history, question)
+    standalone = await condense_query(history, question, user_id=user.id)
 
     # Time-scoped questions constrain retrieval to that window; non-scoped get
     # (None, None) and retrieve over the whole journal.
-    start, end = await parse_date_range(standalone)
+    start, end = await parse_date_range(standalone, user_id=user.id)
     hits = hybrid_search(session, standalone, body.limit, start=start, end=end,
                          user_id=user.id)
     # A window that matches nothing (a period the journal doesn't cover, or a
@@ -134,6 +134,7 @@ async def chat(
             system=cfg["system"],
             model=model,
             max_tokens=max_tokens,
+            user_id=user.id,
         ):
             # JSON-encode each token so newlines in the payload survive the SSE frame.
             yield f"data: {json.dumps(token)}\n\n"

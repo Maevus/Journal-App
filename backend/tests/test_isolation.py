@@ -222,7 +222,7 @@ def test_chat_retrieval_is_scoped_to_the_logged_in_user(client, login, monkeypat
         seen["user_id"] = user_id
         return []
 
-    async def fake_condense(history, question):
+    async def fake_condense(history, question, *, user_id=None):
         return question
 
     async def fake_parse(question, **kwargs):

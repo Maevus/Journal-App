@@ -7,14 +7,11 @@ export function LoginGate() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-paper font-sans text-ink">
       <div className="card-brutal relative max-w-md p-8 pt-10 text-center">
-        <span className="sticker absolute -top-3 left-8 -rotate-1 bg-rose px-3 py-1 text-xs">
-          Private journal
-        </span>
         <h1 className="font-display text-3xl font-bold uppercase tracking-tight">
           Journal <span className="inline-block -rotate-1 bg-rose px-2">Analytics</span>
         </h1>
         <p className="mt-4 text-sm font-medium text-ink/60">
-          Your journal is private. Sign in to see your entries, trends, and
+          Sign in to see your entries, trends, and
           synthesis.
         </p>
         <a
