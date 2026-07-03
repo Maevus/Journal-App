@@ -18,7 +18,7 @@ def test_semantic_signal_ranks_first(client, add_entry, monkeypatch):
     a = add_entry("climbing at the gym")
     add_entry("cooking dinner")
     # Query matches nothing textually, so ranking comes purely from the stub.
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [(a.id, 1.0)])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [(a.id, 1.0)])
 
     results = client.post("/search", json={"query": "zzz", "limit": 5}).json()["results"]
     assert results[0]["id"] == a.id
@@ -28,7 +28,7 @@ def test_semantic_signal_ranks_first(client, add_entry, monkeypatch):
 def test_bm25_keyword_match_surfaces_without_semantic(client, add_entry, monkeypatch):
     a = add_entry("rock climbing adventure")
     add_entry("quiet reading evening")
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [])  # no semantic signal
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [])  # no semantic signal
 
     results = client.post("/search", json={"query": "climbing", "limit": 5}).json()["results"]
     assert results[0]["id"] == a.id  # BM25 alone surfaces the keyword match
@@ -37,6 +37,6 @@ def test_bm25_keyword_match_surfaces_without_semantic(client, add_entry, monkeyp
 def test_respects_limit(client, add_entry, monkeypatch):
     for i in range(5):
         add_entry(f"entry number {i}")
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [])
     results = client.post("/search", json={"query": "entry", "limit": 2}).json()["results"]
     assert len(results) == 2

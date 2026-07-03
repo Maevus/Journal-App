@@ -29,7 +29,7 @@ def test_empty_db_returns_empty(session):
 def test_bm25_surfaces_keyword_without_semantic(session, monkeypatch):
     a = _add(session, "rock climbing adventure")
     _add(session, "quiet reading evening")
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [])
 
     hits = retrieval.hybrid_search(session, "climbing", 5, user_id=1)
     assert hits[0][0].id == a.id
@@ -39,7 +39,7 @@ def test_semantic_signal_ranks_first(session, monkeypatch):
     a = _add(session, "climbing at the gym")
     _add(session, "cooking dinner")
     # Query matches nothing textually → ranking comes purely from the stub.
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [(a.id, 1.0)])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [(a.id, 1.0)])
 
     hits = retrieval.hybrid_search(session, "zzz", 5, user_id=1)
     assert hits[0][0].id == a.id
@@ -48,7 +48,7 @@ def test_semantic_signal_ranks_first(session, monkeypatch):
 def test_respects_limit(session, monkeypatch):
     for i in range(5):
         _add(session, f"entry number {i}")
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [])
 
     hits = retrieval.hybrid_search(session, "entry", 2, user_id=1)
     assert len(hits) == 2
@@ -60,7 +60,7 @@ def test_date_window_excludes_out_of_range_entries(session, monkeypatch):
     in_window = _add(session, "energy high on concerta today", timestamp=datetime(2026, 5, 11))
     out_window = _add(session, "energy high on concerta lately", timestamp=datetime(2025, 11, 11))
     # Semantic ranks the OUT-of-window entry top; without a date filter it'd win.
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit: [(out_window.id, 1.0)])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [(out_window.id, 1.0)])
 
     hits = retrieval.hybrid_search(
         session, "energy concerta", 5,

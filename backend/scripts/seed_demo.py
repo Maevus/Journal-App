@@ -314,7 +314,7 @@ def main() -> None:
             session.add(entry)
             session.commit()
             session.refresh(entry)
-            embed_and_store(entry.id, content)
+            embed_and_store(entry.id, content, user_id=demo_user.id)
             counts[source] = counts.get(source, 0) + 1
 
     span_days = max(days_ago for days_ago, *_ in DEMO_ENTRIES)

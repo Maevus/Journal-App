@@ -199,7 +199,7 @@ def ingest_entries(
                 session.commit()
                 session.refresh(prior)
 
-                embed_and_store(prior.id, content)
+                embed_and_store(prior.id, content, user_id=user_id)
                 updated_entries.append(prior)
                 continue
 
@@ -215,7 +215,7 @@ def ingest_entries(
         session.commit()
         session.refresh(entry)
 
-        embed_and_store(entry.id, content)
+        embed_and_store(entry.id, content, user_id=user_id)
         new_entries.append(entry)
 
     stats = {

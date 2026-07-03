@@ -53,8 +53,8 @@ def hybrid_search(
     say whose, so a forgotten argument fails loudly instead of searching everyone,
     and a transposed one can't bind to the adjacent int `limit` (ADR 0003). The
     SQL candidate set is the isolation boundary — semantic hits on other users'
-    rows are dropped at fusion, so isolation holds even before Chroma metadata
-    carries user_id.
+    rows are dropped at fusion. The Chroma query is user-filtered too (slice 4),
+    but as defense in depth: correctness never rests on vector metadata.
 
     `start`/`end` (naive UTC, half-open `[start, end)`) restrict the candidate
     set to that window before fusion, so a time-scoped question can't be crowded
@@ -70,11 +70,14 @@ def hybrid_search(
         return []
 
     # --- Semantic search (Chroma) ---
-    # search_similar ranks over the whole store; the fusion below keeps only ids
-    # that are in `entries`, so out-of-window semantic hits are discarded.
+    # The ANN query is already user-filtered (vector metadata); the fusion below
+    # additionally keeps only ids in `entries`, so out-of-window semantic hits
+    # are discarded and SQL stays the isolation boundary of record.
     windowed = start is not None or end is not None
     n_semantic = max(limit, _WINDOWED_SEMANTIC_POOL) if windowed else limit
-    semantic_scores: dict[int, float] = dict(search_similar(query, n_semantic))
+    semantic_scores: dict[int, float] = dict(
+        search_similar(query, n_semantic, user_id=user_id)
+    )
 
     # --- Keyword search (BM25), normalised to 0-1 ---
     tokenised_corpus = [e.content.lower().split() for e in entries]

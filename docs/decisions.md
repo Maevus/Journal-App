@@ -168,3 +168,12 @@
   metadata filtering (next slice) is defense-in-depth, not load-bearing. The
   synthesis cache key includes `user_id` so cross-user non-leakage is a property
   of the key, not an accident of prompt contents.
+- **The vector store is isolated too** — `embed_and_store` stamps `user_id` into
+  Chroma metadata and `search_similar` filters the ANN query with
+  `where={"user_id": …}` (both take the same required, keyword-only `user_id`).
+  Defense in depth plus efficiency: the semantic candidate pool is spent on the
+  user's own vectors instead of ranking everyone's. Unowned writes (`user_id=None`,
+  the user-less startup sync) carry **no** user_id key at all — Chroma metadata
+  can't hold NULL, and an absent key matches no filter, mirroring SQL's invisible
+  NULL rows. `scripts/backfill_owner.py` stamps both stores from SQL ownership
+  (SQL is the source of truth), so one idempotent command bridges old data.

@@ -21,11 +21,11 @@ def chroma(tmp_path, monkeypatch):
 
 @pytest.mark.integration
 def test_embed_and_search_round_trip(chroma):
-    emb.embed_and_store(1, "rock climbing at the bouldering gym")
-    emb.embed_and_store(2, "baking sourdough bread in the oven")
-    emb.embed_and_store(3, "belaying technique and lead climbing falls")
+    emb.embed_and_store(1, "rock climbing at the bouldering gym", user_id=1)
+    emb.embed_and_store(2, "baking sourdough bread in the oven", user_id=1)
+    emb.embed_and_store(3, "belaying technique and lead climbing falls", user_id=1)
 
-    results = emb.search_similar("climbing", limit=3)
+    results = emb.search_similar("climbing", limit=3, user_id=1)
 
     ids = [doc_id for doc_id, _ in results]
     scores = [score for _, score in results]
@@ -38,14 +38,27 @@ def test_embed_and_search_round_trip(chroma):
 
 @pytest.mark.integration
 def test_search_empty_real_collection(chroma):
-    assert emb.search_similar("anything") == []
+    assert emb.search_similar("anything", user_id=1) == []
 
 
 @pytest.mark.integration
 def test_upsert_replaces_in_place(chroma):
-    emb.embed_and_store(1, "original text about gardening")
-    emb.embed_and_store(1, "updated text about astronomy and telescopes")  # same id
+    emb.embed_and_store(1, "original text about gardening", user_id=1)
+    emb.embed_and_store(1, "updated text about astronomy and telescopes", user_id=1)  # same id
 
-    results = emb.search_similar("stars and planets", limit=5)
+    results = emb.search_similar("stars and planets", limit=5, user_id=1)
     assert len(results) == 1        # upsert replaced, not appended
     assert results[0][0] == 1
+
+
+@pytest.mark.integration
+def test_vector_query_is_isolated_per_user(chroma):
+    """The design leans on two real Chroma behaviors: the `where` filter drops
+    other users' vectors, and a vector with NO user_id key (unowned) matches no
+    filter at all. Verify both against the real store, not a mock."""
+    emb.embed_and_store(1, "climbing at the bouldering gym", user_id=1)
+    emb.embed_and_store(2, "climbing at the climbing wall", user_id=2)
+    emb.embed_and_store(3, "legacy unowned climbing note", user_id=None)
+
+    assert [i for i, _ in emb.search_similar("climbing", limit=5, user_id=1)] == [1]
+    assert [i for i, _ in emb.search_similar("climbing", limit=5, user_id=2)] == [2]

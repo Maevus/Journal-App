@@ -177,7 +177,7 @@ def test_search_cannot_surface_another_users_entry(client, login, add_entry, mon
     secret = add_entry("alice secret climbing trip", user_id=alice.id)
     bob = login("bob@example.com")
     add_entry("bob cooking dinner", user_id=bob.id)
-    monkeypatch.setattr(retrieval, "search_similar", lambda q, n: [(secret.id, 1.0)])
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, n, *, user_id=None: [(secret.id, 1.0)])
 
     results = client.post("/search", json={"query": "climbing", "limit": 5}).json()["results"]
     assert secret.id not in [r["id"] for r in results]
@@ -252,11 +252,29 @@ def test_hybrid_search_is_scoped_to_the_user(session, monkeypatch):
     _, [bob_entry] = ingest_entries(["climbing walls"], "text", session, user_id=2)
     monkeypatch.setattr(
         retrieval, "search_similar",
-        lambda q, n: [(alice_entry.id, 1.0), (bob_entry.id, 0.9)],
+        lambda q, n, *, user_id=None: [(alice_entry.id, 1.0), (bob_entry.id, 0.9)],
     )
 
     hits = retrieval.hybrid_search(session, "climbing", 5, user_id=2)
     assert [e.id for e, _ in hits] == [bob_entry.id]
+
+
+def test_retrieval_scopes_the_vector_query_itself(session, monkeypatch):
+    """Defense in depth (slice 4): hybrid_search must pass user_id down into the
+    Chroma query, not just drop foreign ids at fusion — so the vector store
+    enforces isolation too and the semantic pool isn't wasted on other users."""
+    import services.retrieval as retrieval
+
+    ingest_entries(["climbing rocks"], "text", session, user_id=2)
+    seen = {}
+
+    def fake_search_similar(query, limit=10, *, user_id=None):
+        seen["user_id"] = user_id
+        return []
+
+    monkeypatch.setattr(retrieval, "search_similar", fake_search_similar)
+    retrieval.hybrid_search(session, "climbing", 5, user_id=2)
+    assert seen["user_id"] == 2
 
 
 def test_legacy_unowned_rows_are_invisible_until_backfilled(client, me, add_entry):
