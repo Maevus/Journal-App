@@ -31,8 +31,10 @@ kill_port() {  # kill whatever holds the port, then wait for it to actually free
 }
 
 wait_for() {  # wait_for <url> <name>
+  # No -f: any HTTP response means the server is up. Data routes 401 without a
+  # login, and that's still proof of life — only connection refused is "down".
   for _ in $(seq 1 30); do
-    curl -sf "$1" >/dev/null 2>&1 && return 0
+    curl -s -o /dev/null "$1" 2>/dev/null && return 0
     sleep 1
   done
   echo "✗ $2 did not come up — check its log" >&2
