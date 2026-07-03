@@ -1,5 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
-import { chatStreamUrl, type ChatMessage, type Citation } from '../api/client'
+import {
+  chatStreamUrl,
+  reportIfAuthExpired,
+  type ChatMessage,
+  type Citation,
+} from '../api/client'
 
 interface UseChatStreamReturn {
   text: string
@@ -75,6 +80,7 @@ export function useChatStream(): UseChatStreamReturn {
           body: JSON.stringify({ messages, limit }),
           signal: ctrl.signal,
         })
+        reportIfAuthExpired(res)
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
         const reader = res.body.getReader()
         const decoder = new TextDecoder()

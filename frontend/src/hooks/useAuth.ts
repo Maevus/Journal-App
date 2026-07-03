@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
-import { fetchMe, logout, type AuthUser } from '../api/client'
+import { AUTH_EXPIRED_EVENT, fetchMe, logout, type AuthUser } from '../api/client'
 
-/** App-wide login state: probe /auth/me once on mount. A failed probe reads
- *  as logged-out rather than an error — login is optional until the isolation
- *  phase gates the data routes, so auth trouble must never block the app. */
+/** App-wide login state: probe /auth/me once on mount, and listen for the
+ *  session dying mid-use (any data route answering 401 dispatches
+ *  AUTH_EXPIRED_EVENT). App owns the single instance and gates on it — every
+ *  data route is auth-scoped, so `user == null` means the login gate IS the
+ *  app. A failed probe reads as logged-out rather than an error. */
 export function useAuth() {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [loading, setLoading] = useState(true)
@@ -23,6 +25,12 @@ export function useAuth() {
     return () => {
       cancelled = true
     }
+  }, [])
+
+  useEffect(() => {
+    const onExpired = () => setUser(null)
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired)
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired)
   }, [])
 
   const signOut = useCallback(async () => {

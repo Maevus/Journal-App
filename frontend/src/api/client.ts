@@ -1,5 +1,17 @@
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'
 
+/** Fired when a data route answers 401: the session died mid-use (expired or
+ *  revoked). useAuth listens and flips the app to the login gate — one emitter,
+ *  one listener, instead of plumbing auth errors up through every hook.
+ *  fetchMe deliberately does NOT report: its 401 means "logged out" as an
+ *  answer, not an expiry. */
+export const AUTH_EXPIRED_EVENT = 'journal:auth-expired'
+
+export function reportIfAuthExpired(res: Response): Response {
+  if (res.status === 401) window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+  return res
+}
+
 export interface SearchResult {
   id: number
   content: string
@@ -43,6 +55,7 @@ export async function ingestEntries(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ entries, source }),
   })
+  reportIfAuthExpired(res)
   if (!res.ok) throw new Error(`Ingest failed: ${res.statusText}`)
   return res.json() as Promise<{ ingested: number; skipped: number }>
 }
@@ -57,6 +70,7 @@ export async function searchEntries(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ query, limit }),
   })
+  reportIfAuthExpired(res)
   if (!res.ok) throw new Error(`Search failed: ${res.statusText}`)
   return res.json() as Promise<{ results: SearchResult[] }>
 }
@@ -66,6 +80,7 @@ export async function fetchTrends(days = 30, source: string | null = null): Prom
   const params = new URLSearchParams({ days: String(days) })
   if (source) params.set('source', source)
   const res = await fetch(`${BASE_URL}/trends?${params}`, { credentials: 'include' })
+  reportIfAuthExpired(res)
   if (!res.ok) throw new Error(`Trends failed: ${res.statusText}`)
   const data = (await res.json()) as { trends: TrendPoint[] }
   return data.trends
@@ -79,6 +94,7 @@ export async function fetchEntriesByDate(
   const params = new URLSearchParams({ date })
   if (source) params.set('source', source)
   const res = await fetch(`${BASE_URL}/entries?${params}`, { credentials: 'include' })
+  reportIfAuthExpired(res)
   if (!res.ok) throw new Error(`Entries failed: ${res.statusText}`)
   const data = (await res.json()) as { entries: DayEntry[] }
   return data.entries

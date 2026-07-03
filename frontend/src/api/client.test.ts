@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  AUTH_EXPIRED_EVENT,
   chatStreamUrl,
   exportUrl,
   fetchEntriesByDate,
@@ -117,6 +118,42 @@ describe('ingestEntries', () => {
   it('throws on failure', async () => {
     mockFetch(null, false, 'Bad Request')
     await expect(ingestEntries(['a'])).rejects.toThrow(/Ingest failed/)
+  })
+})
+
+describe('session expiry reporting', () => {
+  function mock401() {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        json: async () => null,
+      } as Response),
+    )
+  }
+
+  it('a data route answering 401 dispatches AUTH_EXPIRED_EVENT', async () => {
+    mock401()
+    const listener = vi.fn()
+    window.addEventListener(AUTH_EXPIRED_EVENT, listener)
+
+    await expect(fetchTrends()).rejects.toThrow(/Trends failed/)
+
+    expect(listener).toHaveBeenCalledTimes(1)
+    window.removeEventListener(AUTH_EXPIRED_EVENT, listener)
+  })
+
+  it('fetchMe 401 is an answer (logged out), not an expiry — no event', async () => {
+    mock401()
+    const listener = vi.fn()
+    window.addEventListener(AUTH_EXPIRED_EVENT, listener)
+
+    expect(await fetchMe()).toBeNull()
+
+    expect(listener).not.toHaveBeenCalled()
+    window.removeEventListener(AUTH_EXPIRED_EVENT, listener)
   })
 })
 

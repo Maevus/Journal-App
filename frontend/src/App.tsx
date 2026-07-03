@@ -3,17 +3,26 @@ import './App.css'
 import { exportUrl } from './api/client'
 import { AuthWidget } from './components/AuthWidget'
 import { ChatPanel } from './components/ChatPanel'
+import { LoginGate } from './components/LoginGate'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
 import { StreamingPanel } from './components/StreamingPanel'
 import { SOURCE_FILTERS, SourceSelector } from './components/SourceSelector'
 import { TIME_RANGES, TimeRangeSelector } from './components/TimeRangeSelector'
+import { useAuth } from './hooks/useAuth'
 
 function App() {
+  // App owns the single useAuth instance: the gate below and the header
+  // widget must agree on one login state, and mid-session expiry (any 401 →
+  // AUTH_EXPIRED_EVENT → user null) has to flip the whole tree at once.
+  const { user, loading, signOut } = useAuth()
   // One time period + source filter drives the mood chart, day drill-down,
   // and the synthesis panel.
   const [range, setRange] = useState(TIME_RANGES[0])
   const [source, setSource] = useState(SOURCE_FILTERS[0])
+
+  if (loading) return null // don't flash the gate (or the dashboard) mid-probe
+  if (!user) return <LoginGate />
 
   return (
     <div className="min-h-screen bg-paper font-sans text-ink">
@@ -29,7 +38,7 @@ function App() {
             </p>
           </div>
           <div className="flex flex-col items-start gap-2 sm:items-end">
-            <AuthWidget />
+            <AuthWidget user={user} onSignOut={() => void signOut()} />
             <TimeRangeSelector value={range} onChange={setRange} />
             <SourceSelector value={source} onChange={setSource} />
             <div className="flex flex-wrap items-center gap-2">
