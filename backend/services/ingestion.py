@@ -26,6 +26,7 @@ from sqlmodel import Session, select
 from clock import utcnow_naive
 from models.journal import JournalEntry, engine
 from services.embeddings import embed_and_store
+from services.quota import QuotaExceededError
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,10 @@ async def score_mood_background(entry_id: int, content: str, *, user_id: Optiona
                 entry.mood_reasoning = result.reasoning
                 session.commit()
 
+    except QuotaExceededError as exc:
+        # Expected under F2, not a failure: the budget gate refused before any
+        # spend. INFO so a day of quota-skipped scorings reads as what it is.
+        logger.info("Mood scoring skipped for entry %d (quota): %s", entry_id, exc)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Mood scoring failed for entry %d: %s", entry_id, exc)
 

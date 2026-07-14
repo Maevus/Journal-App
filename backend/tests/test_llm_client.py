@@ -7,7 +7,9 @@ import httpx
 import pytest
 from pydantic import BaseModel
 
+import config
 import services.llm_client as llm
+from services.quota import QuotaExceededError
 
 
 # --- fakes for the AsyncAnthropic client -----------------------------------
@@ -175,6 +177,27 @@ async def test_stream_text_raises_after_exhausting_retries(monkeypatch):
     with pytest.raises(anthropic.APIConnectionError):
         [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert msgs.stream_calls == 3
+
+
+async def test_stream_text_refuses_over_budget_before_any_api_call(monkeypatch):
+    """The F2 gate: quota runs BEFORE the call, so an over-budget user costs
+    zero API traffic — not one token, not one connection attempt."""
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.0)
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["never"]))
+    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    with pytest.raises(QuotaExceededError):
+        [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert msgs.stream_calls == 0
+
+
+async def test_structured_output_refuses_over_budget_before_any_api_call(monkeypatch):
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.0)
+    block = SimpleNamespace(type="tool_use", name="structured_extract", input={"score": 1, "reasoning": "z"})
+    msgs = _FakeMessages(create_side_effect=[_resp(block)])
+    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    with pytest.raises(QuotaExceededError):
+        await llm.structured_output("prompt", _Schema, user_id=1)
+    assert msgs.create_calls == 0
 
 
 async def test_structured_output_raises_after_exhausting_retries(monkeypatch):

@@ -97,4 +97,41 @@ describe('useChatStream', () => {
     await waitFor(() => expect(result.current.error).toMatch(/backend running/i))
     expect(result.current.isStreaming).toBe(false)
   })
+
+  it('captures a quota refusal frame as quota, not error or text', async () => {
+    // Over-budget turns are refused inside the 200 stream (F2): a named
+    // `event: quota` frame, no tokens, no sources, then a clean [DONE].
+    const fetchMock = vi.fn().mockResolvedValue(
+      streamResponse([
+        'event: quota\ndata: {"code":"quota_exhausted","message":"daily LLM budget exhausted"}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useChatStream())
+    act(() => result.current.start([{ role: 'user', content: 'hi' }]))
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    expect(result.current.quota).toMatch(/budget/i)
+    expect(result.current.text).toBe('')
+    expect(result.current.error).toBeNull()
+  })
+
+  it('start() clears a previous quota notice', async () => {
+    const refusal = streamResponse([
+      'event: quota\ndata: {"code":"quota_exhausted","message":"daily LLM budget exhausted"}\n\n',
+      'data: [DONE]\n\n',
+    ])
+    const answer = streamResponse(['data: "Hi"\n\n', 'data: [DONE]\n\n'])
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(refusal).mockResolvedValueOnce(answer))
+
+    const { result } = renderHook(() => useChatStream())
+    act(() => result.current.start([{ role: 'user', content: 'hi' }]))
+    await waitFor(() => expect(result.current.quota).not.toBeNull())
+
+    act(() => result.current.start([{ role: 'user', content: 'again' }]))
+    await waitFor(() => expect(result.current.text).toBe('Hi'))
+    expect(result.current.quota).toBeNull()
+  })
 })

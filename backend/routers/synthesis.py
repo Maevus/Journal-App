@@ -16,6 +16,7 @@ from models.journal import JournalEntry, get_session, user_entries
 from models.user import User
 from services.auth import get_current_user
 from services.llm_client import DEFAULT_MODEL, stream_text
+from services.quota import QuotaExceededError, sse_quota_frame
 
 logger = logging.getLogger(__name__)
 
@@ -115,16 +116,23 @@ async def synthesis(
         # Miss: stream from the LLM, accumulating tokens. Only cache once the
         # stream completes — a mid-stream failure propagates and stores nothing.
         chunks: list[str] = []
-        async for token in stream_text(
-            prompt=user_prompt,
-            system=cfg["system"],
-            model=model,
-            max_tokens=max_tokens,
-            user_id=user.id,
-        ):
-            chunks.append(token)
-            # JSON-encode each token so newlines in the payload are safe in SSE
-            yield f"data: {json.dumps(token)}\n\n"
+        try:
+            async for token in stream_text(
+                prompt=user_prompt,
+                system=cfg["system"],
+                model=model,
+                max_tokens=max_tokens,
+                user_id=user.id,
+            ):
+                chunks.append(token)
+                # JSON-encode each token so newlines in the payload are safe in SSE
+                yield f"data: {json.dumps(token)}\n\n"
+        except QuotaExceededError as exc:
+            # Nothing is cached: the refusal is about today's budget, not
+            # this prompt's answer.
+            yield sse_quota_frame(exc)
+            yield "data: [DONE]\n\n"
+            return
         _cache_put(key, "".join(chunks))
         yield "data: [DONE]\n\n"
 

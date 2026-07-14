@@ -12,7 +12,7 @@ interface StreamingPanelProps {
 }
 
 export function StreamingPanel({ range, source }: StreamingPanelProps) {
-  const { text, error, isStreaming, start, abort } = useSSE(
+  const { text, error, quota, isStreaming, start, abort } = useSSE(
     synthesisUrl(20, range.days, source.value),
   )
   const scopeLabel = source.value ? `${range.label} · ${source.label}` : range.label
@@ -64,6 +64,16 @@ export function StreamingPanel({ range, source }: StreamingPanelProps) {
         </div>
       )}
 
+      {quota && !isStreaming && (
+        <div
+          className="mb-3 rounded-brutal border-2 border-ink bg-gold p-3 text-sm font-medium"
+          role="status"
+        >
+          Today&rsquo;s LLM budget is used up — it resets at midnight UTC.
+          Bring-your-own-key support is coming soon.
+        </div>
+      )}
+
       {stale && !isStreaming && (
         <div
           className="mb-3 rounded-brutal border-2 border-ink bg-gold p-3 text-sm font-medium"
@@ -85,7 +95,7 @@ export function StreamingPanel({ range, source }: StreamingPanelProps) {
         </div>
       )}
 
-      {!text && !isStreaming && !error && (
+      {!text && !isStreaming && !error && !quota && (
         <p className="text-sm font-medium text-ink/50">
           Click &ldquo;Generate synthesis&rdquo; to analyse your journal entries from{' '}
           {range.label === 'All time' ? 'all time' : `the last ${range.label.toLowerCase()}`}.

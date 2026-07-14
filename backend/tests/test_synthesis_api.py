@@ -6,6 +6,7 @@ from collections import OrderedDict
 from datetime import datetime
 
 import routers.synthesis as synthesis
+from services.quota import QuotaExceededError
 
 
 def _fake_stream_factory(calls):
@@ -14,6 +15,35 @@ def _fake_stream_factory(calls):
         for token in ["Hello", " there"]:
             yield token
     return fake_stream
+
+
+async def _refusing_stream(*args, **kwargs):
+    """The gate refuses at first iteration, before any token — exactly like
+    the real stream_text with an exhausted budget."""
+    raise QuotaExceededError("daily LLM budget exhausted")
+    yield  # unreachable; makes this an async generator like the real thing
+
+
+def test_over_budget_streams_quota_frame_and_caches_nothing(client, add_entry, monkeypatch):
+    """An over-budget user gets a named `event: quota` SSE frame (EventSource
+    can't read a 4xx body, so refusal rides inside the 200 stream) and a clean
+    [DONE]. The refusal must not poison the cache: once there's budget again,
+    the same request must reach the LLM, not replay a phantom cache entry."""
+    monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
+    add_entry("a reflective entry", timestamp=datetime(2026, 5, 10))
+    monkeypatch.setattr(synthesis, "stream_text", _refusing_stream)
+
+    r = client.get("/stream/synthesis", params={"days": 0, "limit": 5})
+    assert r.status_code == 200
+    assert "event: quota" in r.text
+    assert "data: [DONE]" in r.text
+
+    # Budget restored (stream works again) → the LLM must actually be called.
+    calls = []
+    monkeypatch.setattr(synthesis, "stream_text", _fake_stream_factory(calls))
+    r2 = client.get("/stream/synthesis", params={"days": 0, "limit": 5})
+    assert len(calls) == 1
+    assert "Hello there" not in r.text  # and the refused response carried no text
 
 
 def test_miss_streams_tokens_then_caches(client, add_entry, monkeypatch):

@@ -11,6 +11,12 @@ class FakeEventSource {
   onmessage: ((e: { data: string }) => void) | null = null
   onerror: (() => void) | null = null
   close = vi.fn()
+  // Named SSE events (e.g. `event: quota`) never reach onmessage — they only
+  // fire listeners registered for that exact type, like the real EventSource.
+  listeners: Record<string, (e: { data: string }) => void> = {}
+  addEventListener = (type: string, fn: (e: { data: string }) => void) => {
+    this.listeners[type] = fn
+  }
 
   constructor(url: string) {
     this.url = url
@@ -71,5 +77,34 @@ describe('useSSE', () => {
     act(() => FakeEventSource.last().onerror?.())
     expect(result.current.error).toMatch(/Stream connection failed/i)
     expect(result.current.isStreaming).toBe(false)
+  })
+
+  it('captures a quota refusal as quota, not error', () => {
+    // The backend refuses over-budget calls inside the 200 stream with a named
+    // `event: quota` frame (F2) — a refusal is an answer, not a failure.
+    const { result } = renderHook(() => useSSE('http://x/stream'))
+    act(() => result.current.start())
+    act(() =>
+      FakeEventSource.last().listeners['quota']?.({
+        data: '{"code":"quota_exhausted","message":"daily LLM budget exhausted"}',
+      }),
+    )
+    act(() => FakeEventSource.last().onmessage?.({ data: '[DONE]' })) // frame is followed by a clean DONE
+    expect(result.current.quota).toMatch(/budget/i)
+    expect(result.current.error).toBeNull()
+    expect(result.current.isStreaming).toBe(false)
+  })
+
+  it('start() clears a previous quota notice', () => {
+    const { result } = renderHook(() => useSSE('http://x/stream'))
+    act(() => result.current.start())
+    act(() =>
+      FakeEventSource.last().listeners['quota']?.({
+        data: '{"code":"quota_exhausted","message":"daily LLM budget exhausted"}',
+      }),
+    )
+    expect(result.current.quota).not.toBeNull()
+    act(() => result.current.start())
+    expect(result.current.quota).toBeNull()
   })
 })

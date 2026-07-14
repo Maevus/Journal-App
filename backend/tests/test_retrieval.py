@@ -174,3 +174,25 @@ async def test_condense_query_falls_back_when_blank(monkeypatch):
     )
     history = [{"role": "user", "content": "earlier"}]
     assert await retrieval.condense_query(history, "and June?", user_id=1) == "and June?"
+
+
+async def test_quota_refusal_degrades_like_any_llm_failure(monkeypatch):
+    """F2 pin: chat's cheap helpers must keep degrading gracefully when the
+    quota gate refuses their haiku calls — the refusal costs $0 and the turn
+    still gets stopped (with the user-facing quota frame) at its main call.
+    Guards against ever narrowing their broad `except` past QuotaExceededError."""
+    from services.quota import QuotaExceededError
+
+    async def refuse(*args, **kwargs):
+        raise QuotaExceededError("daily LLM budget exhausted")
+
+    monkeypatch.setattr(retrieval, "structured_output", refuse)
+    assert await retrieval.parse_date_range("energy in May", user_id=1) == (None, None)
+    assert (
+        await retrieval.condense_query(
+            [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}],
+            "and June?",
+            user_id=1,
+        )
+        == "and June?"
+    )

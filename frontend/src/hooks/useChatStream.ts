@@ -10,6 +10,9 @@ interface UseChatStreamReturn {
   text: string
   sources: Citation[]
   error: string | null
+  /** Message from an `event: quota` refusal frame (F2) — the backend refused
+   *  the LLM call before spending. A refusal is an answer, not an error. */
+  quota: string | null
   isStreaming: boolean
   start: (messages: ChatMessage[], limit?: number) => void
   abort: () => void
@@ -26,6 +29,7 @@ export function useChatStream(): UseChatStreamReturn {
   const [text, setText] = useState('')
   const [sources, setSources] = useState<Citation[]>([])
   const [error, setError] = useState<string | null>(null)
+  const [quota, setQuota] = useState<string | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const ctrlRef = useRef<AbortController | null>(null)
 
@@ -42,6 +46,7 @@ export function useChatStream(): UseChatStreamReturn {
     setText('')
     setSources([])
     setError(null)
+    setQuota(null)
     setIsStreaming(true)
 
     const handleFrame = (frame: string) => {
@@ -58,6 +63,16 @@ export function useChatStream(): UseChatStreamReturn {
           setSources(JSON.parse(data) as Citation[])
         } catch {
           /* malformed sources frame — leave chips empty */
+        }
+        return
+      }
+      if (event === 'quota') {
+        // The F2 refusal: the backend declined the LLM call before spending.
+        try {
+          const payload = JSON.parse(data) as { message?: string }
+          setQuota(payload.message ?? 'Daily LLM budget reached.')
+        } catch {
+          setQuota('Daily LLM budget reached.')
         }
         return
       }
@@ -107,5 +122,5 @@ export function useChatStream(): UseChatStreamReturn {
     })()
   }, [])
 
-  return { text, sources, error, isStreaming, start, abort }
+  return { text, sources, error, quota, isStreaming, start, abort }
 }

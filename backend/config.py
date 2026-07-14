@@ -45,6 +45,26 @@ SYNC_ON_STARTUP = os.getenv(
 # picks up newly-appended pages of the growing GoodNotes PDF backup.
 GOODNOTES_SCAN_INTERVAL_MIN = int(os.getenv("GOODNOTES_SCAN_INTERVAL_MIN", "0"))
 
+# --- Freemium quotas (ADR 0003, F2) ---
+# Daily LLM budgets in dollars over a UTC-day window, read at call time by
+# services/quota.py. The launch posture (docs/decisions.md, 2026-07-03): the
+# free tier costs us $0 — keyless users get budget $0 and a friendly refusal;
+# LLM features unlock with a BYO key (F4). Flipping to a subsidized budget
+# later is an env change, not a redesign.
+FREE_TIER_DAILY_USD = float(os.getenv("FREE_TIER_DAILY_USD", "0"))
+
+# Demo mode logs every visitor in as the seeded demo user, so the $0 free
+# tier would refuse the whole showcase (chat always, synthesis on any cache
+# miss). The demo gets its own small budget instead — bounded per day and
+# backstopped by the global cap.
+DEMO_DAILY_USD = float(os.getenv("DEMO_DAILY_USD", "1"))
+
+# Service-wide daily spend cap across ALL users and system work — the
+# kill-switch that bounds the worst day our API key can have. Defaults to a
+# real number rather than "unset = uncapped": a kill-switch that defaults to
+# off isn't one.
+GLOBAL_DAILY_USD = float(os.getenv("GLOBAL_DAILY_USD", "5"))
+
 # --- Auth: Sign in with Google (ADR 0003) ---
 # OAuth client credentials from Google Cloud Console → Credentials → OAuth
 # client ID (type "Web application", redirect URI http://localhost:8000/auth/callback).

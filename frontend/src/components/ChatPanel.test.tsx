@@ -9,6 +9,7 @@ const chat = vi.hoisted(() => ({
   text: '',
   sources: [] as Citation[],
   error: null as string | null,
+  quota: null as string | null,
   isStreaming: false,
   start: vi.fn(),
   abort: vi.fn(),
@@ -31,6 +32,7 @@ beforeEach(() => {
   chat.text = ''
   chat.sources = []
   chat.error = null
+  chat.quota = null
   chat.isStreaming = false
   chat.start.mockClear()
   chat.abort.mockClear()
@@ -112,5 +114,16 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /clear/i }))
     expect(screen.queryByText(/An answer/)).toBeNull()
     expect(screen.getByText(/grounded in your entries/i)).toBeInTheDocument()
+  })
+})
+
+describe('ChatPanel quota refusal', () => {
+  it('shows a friendly notice, not the error alert, when a turn is refused', () => {
+    // After an over-budget turn: the question is pending, no answer text came.
+    chat.quota = 'daily LLM budget exhausted'
+    render(<ChatPanel />)
+    ask('how was May?')
+    expect(screen.getByText(/budget/i)).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull() // a refusal is not an error
   })
 })

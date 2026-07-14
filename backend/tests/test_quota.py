@@ -1,0 +1,152 @@
+"""Quota-before-call (freemium F2, ADR 0003).
+
+check_quota is the money gate: it runs BEFORE an LLM call and fails closed —
+the deliberate asymmetry with _log_usage, which runs after and never kills the
+call it's metering. These tests exercise the public interface only:
+check_quota(user_id=...) either returns or raises QuotaExceededError.
+
+Spend rows are seeded through the same in-memory meter DB the autouse
+`meter_db` fixture gives llm_client, so the tests never touch journal.db.
+"""
+from datetime import timedelta
+
+import pytest
+from sqlmodel import Session
+
+import config
+from clock import utcnow_naive
+from models.usage import LLMUsage
+from services.quota import QuotaExceededError, check_quota
+
+_UTC_MIDNIGHT = utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def _spend(engine, *, user_id, cost, created_at=None):
+    """Seed one meter row, exactly as _log_usage would have written it."""
+    with Session(engine) as s:
+        row = LLMUsage(
+            user_id=user_id, model="test-model", input_tokens=1, output_tokens=1, cost=cost
+        )
+        if created_at is not None:
+            row.created_at = created_at
+        s.add(row)
+        s.commit()
+
+
+@pytest.fixture
+def budget(monkeypatch):
+    """Give the free tier a nonzero budget for the tests about quota *math*
+    (the default $0 refuses everything before the math matters). Also pins the
+    global cap — roomy unless a test is about the cap itself — so per-user
+    tests can't trip it by accident."""
+    def _set(usd, global_usd=100.0):
+        monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", usd)
+        monkeypatch.setattr(config, "GLOBAL_DAILY_USD", global_usd)
+
+    return _set
+
+
+def test_zero_budget_refuses_even_with_zero_spend(meter_db, budget):
+    """The launch posture: keyless users have a $0 budget (the shipped config
+    default), so the gate must refuse at zero spend — spent >= budget, not >.
+    A `>` comparison would wave every $0-budget user through."""
+    budget(0.0)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1)
+
+
+def test_under_budget_is_allowed(meter_db, budget):
+    budget(1.0)
+    _spend(meter_db, user_id=1, cost=0.40)
+    check_quota(user_id=1)  # must not raise
+
+
+def test_exactly_at_limit_refuses(meter_db, budget):
+    """Spent == budget is exhausted, not \"one more call's worth left\"."""
+    budget(1.0)
+    _spend(meter_db, user_id=1, cost=0.60)
+    _spend(meter_db, user_id=1, cost=0.40)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1)
+
+
+def test_quota_resets_at_utc_midnight(meter_db, budget):
+    """Yesterday's spend is yesterday's problem: a row one second before UTC
+    midnight doesn't count, a row exactly at midnight does."""
+    budget(1.0)
+    _spend(meter_db, user_id=1, cost=5.0, created_at=_UTC_MIDNIGHT - timedelta(seconds=1))
+    check_quota(user_id=1)  # yesterday's $5 doesn't count against today
+
+    _spend(meter_db, user_id=1, cost=1.0, created_at=_UTC_MIDNIGHT)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1)  # today's $1 does
+
+
+def test_other_users_spend_does_not_count(meter_db, budget):
+    """The meter query is user-scoped like every other read in this app."""
+    budget(1.0)
+    _spend(meter_db, user_id=2, cost=99.0)
+    check_quota(user_id=1)  # must not raise
+
+
+def test_system_work_is_exempt_from_per_user_budget(meter_db, budget):
+    """user_id=None is system work (the user-less startup-sync mood scoring):
+    metered for visibility, charged to nobody's quota. It must pass even with
+    a $0 per-user budget — only the global cap can stop it."""
+    budget(0.0)
+    _spend(meter_db, user_id=None, cost=0.10)
+    check_quota(user_id=None)  # must not raise
+
+
+def test_global_cap_trumps_per_user_headroom(meter_db, budget, monkeypatch):
+    """The kill-switch: once everyone's spend today reaches the global cap, a
+    user with personal budget left is still refused — the cap protects our key,
+    not their allowance. System (None) rows count toward it; yesterday's don't."""
+    budget(10.0)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 5.0)
+    _spend(meter_db, user_id=2, cost=99.0, created_at=_UTC_MIDNIGHT - timedelta(seconds=1))
+    _spend(meter_db, user_id=2, cost=3.0)
+    _spend(meter_db, user_id=None, cost=2.0)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1)
+
+
+def test_global_cap_stops_system_work_too(meter_db, monkeypatch):
+    """System work skips the per-user budget, not the kill-switch."""
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 5.0)
+    _spend(meter_db, user_id=2, cost=5.0)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=None)
+
+
+def test_demo_mode_grants_the_demo_budget(meter_db, monkeypatch):
+    """Demo mode logs every visitor in as the seeded demo user, who is keyless
+    — under the $0 free tier the whole showcase would refuse (chat always,
+    synthesis on any cache miss). Demo gets its own small env-tunable budget
+    instead (decided 2026-07-13), bounded per day and backstopped by the
+    global cap."""
+    monkeypatch.setattr(config, "IS_DEMO", True)
+    monkeypatch.setattr(config, "DEMO_DAILY_USD", 1.0)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
+
+    _spend(meter_db, user_id=1, cost=0.50)
+    check_quota(user_id=1)  # $0.50 < the $1 demo budget → allowed
+
+    _spend(meter_db, user_id=1, cost=0.50)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1)  # $1.00 == the demo budget → exhausted
+
+
+def test_fails_closed_when_the_check_itself_breaks(budget, monkeypatch):
+    """The asymmetry with the meter: _log_usage never kills the call it's
+    metering (money already spent); the gate refuses when it can't verify
+    (money not spent yet). A broken check must surface as the same
+    QuotaExceededError callers already handle — not a raw DB error, and
+    never a free pass."""
+    import services.quota as quota
+    from sqlmodel import create_engine
+
+    budget(100.0)  # plenty of budget — only the breakage should refuse
+    monkeypatch.setattr(quota, "engine", create_engine("sqlite:////nonexistent/nowhere.db"))
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1)

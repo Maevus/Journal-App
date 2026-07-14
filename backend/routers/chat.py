@@ -13,6 +13,7 @@ from models.journal import get_session
 from models.user import User
 from services.auth import get_current_user
 from services.llm_client import DEFAULT_MODEL, stream_text
+from services.quota import QuotaExceededError, sse_quota_frame
 from services.retrieval import condense_query, hybrid_search, parse_date_range
 
 logger = logging.getLogger(__name__)
@@ -129,15 +130,22 @@ async def chat(
     max_tokens = cfg.get("max_tokens", 2048)
 
     async def event_stream():
-        async for token in stream_text(
-            messages=llm_messages,
-            system=cfg["system"],
-            model=model,
-            max_tokens=max_tokens,
-            user_id=user.id,
-        ):
-            # JSON-encode each token so newlines in the payload survive the SSE frame.
-            yield f"data: {json.dumps(token)}\n\n"
+        try:
+            async for token in stream_text(
+                messages=llm_messages,
+                system=cfg["system"],
+                model=model,
+                max_tokens=max_tokens,
+                user_id=user.id,
+            ):
+                # JSON-encode each token so newlines in the payload survive the SSE frame.
+                yield f"data: {json.dumps(token)}\n\n"
+        except QuotaExceededError as exc:
+            # No sources frame after a refusal — citation chips for an answer
+            # that never happened would be orphans.
+            yield sse_quota_frame(exc)
+            yield "data: [DONE]\n\n"
+            return
         # Structured sources frame (named event) after the text, before [DONE].
         yield f"event: sources\ndata: {json.dumps(sources)}\n\n"
         yield "data: [DONE]\n\n"

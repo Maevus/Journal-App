@@ -3,6 +3,9 @@ import { useCallback, useRef, useState } from 'react'
 interface UseSSEReturn {
   text: string
   error: string | null
+  /** Message from an `event: quota` refusal frame (F2) — the backend refused
+   *  the LLM call before spending. A refusal is an answer, not an error. */
+  quota: string | null
   isStreaming: boolean
   start: () => void
   abort: () => void
@@ -11,6 +14,7 @@ interface UseSSEReturn {
 export function useSSE(url: string): UseSSEReturn {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [quota, setQuota] = useState<string | null>(null)
   const [isStreaming, setIsStreaming] = useState(false)
   const sourceRef = useRef<EventSource | null>(null)
 
@@ -24,6 +28,7 @@ export function useSSE(url: string): UseSSEReturn {
     sourceRef.current?.close()
     setText('')
     setError(null)
+    setQuota(null)
     setIsStreaming(true)
 
     // withCredentials is EventSource's spelling of `credentials: 'include'` —
@@ -47,6 +52,17 @@ export function useSSE(url: string): UseSSEReturn {
       }
     }
 
+    // Named events bypass onmessage — the quota refusal frame needs its own
+    // listener. The frame is followed by a normal [DONE], which closes us.
+    es.addEventListener('quota', (event: MessageEvent<string>) => {
+      try {
+        const payload = JSON.parse(event.data) as { message?: string }
+        setQuota(payload.message ?? 'Daily LLM budget reached.')
+      } catch {
+        setQuota('Daily LLM budget reached.')
+      }
+    })
+
     es.onerror = () => {
       es.close()
       sourceRef.current = null
@@ -55,5 +71,5 @@ export function useSSE(url: string): UseSSEReturn {
     }
   }, [url])
 
-  return { text, error, isStreaming, start, abort }
+  return { text, error, quota, isStreaming, start, abort }
 }

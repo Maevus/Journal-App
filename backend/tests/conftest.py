@@ -20,14 +20,16 @@ def meter_db(monkeypatch):
     never write to the real journal.db. Meter tests request this fixture by
     name to assert on the rows."""
     import services.llm_client as llm_client
+    import services.quota as quota
 
     eng = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
     )
     SQLModel.metadata.create_all(eng)
-    # raising=False: nothing to patch until llm_client grows its engine — the
-    # meter tests themselves are what fail red, not every test in the suite.
-    monkeypatch.setattr(llm_client, "engine", eng, raising=False)
+    monkeypatch.setattr(llm_client, "engine", eng)
+    # The quota gate (services/quota.py) reads the same meter table the
+    # metering writes — both must see the same test DB.
+    monkeypatch.setattr(quota, "engine", eng)
     yield eng
     eng.dispose()
 
@@ -50,6 +52,19 @@ def session():
 def _stub_embeddings(monkeypatch):
     """ingest_entries writes to Chroma via embed_and_store; no-op it in tests."""
     monkeypatch.setattr(ingestion, "embed_and_store", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def quota_headroom(monkeypatch):
+    """The shipped default budget is $0 (the keyless launch posture), which
+    would refuse every attributed LLM call in the suite. Give tests generous
+    headroom so quota only bites where a test explicitly sets a budget —
+    the same opt-in stance as meter_db."""
+    import config
+
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 100.0)
+    monkeypatch.setattr(config, "DEMO_DAILY_USD", 100.0)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 10_000.0)
 
 
 @pytest.fixture

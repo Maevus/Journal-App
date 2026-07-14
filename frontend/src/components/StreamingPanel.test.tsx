@@ -7,6 +7,7 @@ import { StreamingPanel } from './StreamingPanel'
 const sse = vi.hoisted(() => ({
   text: '',
   error: null as string | null,
+  quota: null as string | null,
   isStreaming: false,
   start: vi.fn(),
   abort: vi.fn(),
@@ -20,6 +21,7 @@ const allSources = { value: null, label: 'All' }
 beforeEach(() => {
   sse.text = ''
   sse.error = null
+  sse.quota = null
   sse.isStreaming = false
   sse.start.mockClear()
   sse.abort.mockClear()
@@ -46,6 +48,13 @@ describe('StreamingPanel', () => {
     expect(screen.getByText(/Synthesis of your month/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /generate synthesis/i }))
     expect(sse.start).toHaveBeenCalled()
+  })
+
+  it('shows a friendly notice, not the error alert, on a quota refusal', () => {
+    sse.quota = 'daily LLM budget exhausted'
+    render(<StreamingPanel range={range} source={allSources} />)
+    expect(screen.getByText(/budget/i)).toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull() // a refusal is not an error
   })
 
   it('flags the text stale when the scope changes after generating', () => {

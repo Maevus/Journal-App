@@ -242,3 +242,31 @@ def test_blank_last_message_short_circuits(client, me, monkeypatch):
     assert "data: [DONE]" in r.text
     assert len(calls) == 0  # no LLM call
     assert len(retrieved) == 0  # no retrieval either
+
+
+async def _refusing_stream(*args, **kwargs):
+    """The F2 gate refuses at first iteration, before any token."""
+    from services.quota import QuotaExceededError
+
+    raise QuotaExceededError("daily LLM budget exhausted")
+    yield  # unreachable; makes this an async generator like the real thing
+
+
+def test_over_budget_streams_quota_frame_without_sources(client, me, monkeypatch):
+    """An over-budget chat turn gets the named `event: quota` frame and a clean
+    [DONE] — and no `event: sources` frame, since citation chips for an answer
+    that never happened would be orphans."""
+    monkeypatch.setattr(chat, "hybrid_search", lambda *a, **k: [])
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
+    monkeypatch.setattr(chat, "stream_text", _refusing_stream)
+
+    r = client.post(
+        "/stream/chat",
+        json={"messages": [{"role": "user", "content": "how was May?"}], "limit": 5},
+    )
+
+    assert r.status_code == 200
+    assert "event: quota" in r.text
+    assert "data: [DONE]" in r.text
+    assert "event: sources" not in r.text

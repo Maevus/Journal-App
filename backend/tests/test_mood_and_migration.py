@@ -81,3 +81,30 @@ async def test_score_mood_swallows_errors(mood_engine, monkeypatch):
         e = s.get(JournalEntry, eid)
         assert e.mood_score is None
         assert e.mood_reasoning is None
+
+
+async def test_score_mood_quota_skip_is_logged_as_skip_not_failure(
+    mood_engine, monkeypatch, caplog
+):
+    """A quota refusal is expected behavior (F2), not an error: the entry stays
+    unscored, nothing raises, and the log says 'quota' at INFO — distinct from
+    the 'failed' warning — so a day of quota-skipped scorings is visible for
+    what it is."""
+    from services.quota import QuotaExceededError
+
+    eid = _make_entry(mood_engine)
+
+    async def refuse(*args, **kwargs):
+        raise QuotaExceededError("daily LLM budget exhausted")
+
+    monkeypatch.setattr("services.llm_client.structured_output", refuse)
+    with caplog.at_level("INFO", logger="services.ingestion"):
+        await ingestion.score_mood_background(eid, "x", user_id=1)  # must not raise
+
+    assert any(
+        "quota" in r.message.lower() and r.levelname == "INFO" for r in caplog.records
+    )
+    assert not any(r.levelname == "WARNING" for r in caplog.records)
+
+    with Session(mood_engine) as s:
+        assert s.get(JournalEntry, eid).mood_score is None

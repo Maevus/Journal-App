@@ -53,7 +53,7 @@ export function ChatPanel() {
   // The question currently being answered (rendered live until it freezes into a Turn).
   const [pending, setPending] = useState<string | null>(null)
   const [selected, setSelected] = useState<{ date: string; source: string } | null>(null)
-  const { text, sources, error, isStreaming, start, abort } = useChatStream()
+  const { text, sources, error, quota, isStreaming, start, abort } = useChatStream()
   const scrollRef = useRef<HTMLDivElement>(null)
 
   // Keep the latest answer pinned to the bottom while tokens stream in.
@@ -142,6 +142,16 @@ export function ChatPanel() {
           role="alert"
         >
           {error}
+        </div>
+      )}
+
+      {quota && !isStreaming && (
+        <div
+          className="mb-3 rounded-brutal border-2 border-ink bg-gold p-3 text-sm font-medium"
+          role="status"
+        >
+          Today&rsquo;s LLM budget is used up — asking resumes at midnight UTC.
+          Bring-your-own-key support is coming soon.
         </div>
       )}
 

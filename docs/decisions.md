@@ -197,3 +197,50 @@
   condense/date-parse bill the asking user. The meter write never kills the call
   it's metering (tokens already delivered — log loudly, move on); quota (F2)
   fails closed instead, but runs *before* the money is spent.
+
+## Freemium F2 — quota before the call (2026-07-14)
+
+- **The quota gate lives in `llm_client`, beside the meter** —
+  `services/quota.py:check_quota(*, user_id)` runs at the top of both LLM entry
+  points, before any API traffic. Same argument as F1: the choke point makes a
+  forgotten check structurally impossible, and it covers all five spend
+  surfaces including background mood scoring and chat's nested haiku calls,
+  which never pass through a route dependency. Free things stay free by
+  construction: synthesis cache hits, search, trends, and export never reach
+  `llm_client`, so they never reach the gate.
+- **Semantics**: per-user `SUM(cost)` since UTC midnight (the two columns F1
+  indexed for exactly this), refuse at spent **>= budget** — `>=` so the $0
+  keyless budget refuses at zero spend. A **global daily cap** is checked
+  first in the same gate: it applies to every call *including* `user_id=None`
+  system work (it protects our key, not anyone's allowance), while system work
+  is exempt from the per-user check. The check is retrospective (a call's cost
+  is unknowable beforehand), so a user can overshoot by at most one call —
+  the tail the global cap bounds.
+- **Fails closed — the deliberate asymmetry with the meter**: a quota check
+  that errors refuses the call (`QuotaExceededError`, same type callers already
+  handle). The meter never kills the call it's metering because that money is
+  already spent; here it isn't yet.
+- **Refusal UX (user chose, 2026-07-13)**: both streams emit a named
+  `event: quota` SSE frame inside the 200 response (EventSource can't read a
+  4xx body; mirrors chat's `event: sources` precedent) — one wire format,
+  defined once in `quota.sse_quota_frame`. Chat sends no sources frame after a
+  refusal (no citation chips for an answer that never happened) and synthesis
+  caches nothing. Frontend: `useSSE`/`useChatStream` expose `quota` state
+  (named events need an explicit `addEventListener` — they bypass `onmessage`),
+  panels render a gold `role="status"` notice, distinct from the error alert.
+  Mood scoring logs a quota skip at INFO (expected behavior), not WARNING;
+  condense/date-parse degrade as before (refusal costs $0; the turn still gets
+  the quota frame at its main call).
+- **Demo gets its own budget (user chose, 2026-07-13)** — demo mode logs every
+  visitor in as the seeded demo user, so the $0 free tier would have refused
+  the whole showcase (chat always, synthesis on any cache miss — a gap found
+  in the recorded posture). `DEMO_DAILY_USD` (default $1/day) keeps the demo
+  alive, bounded, and backstopped by the global cap. Budgets are env-tunable:
+  `FREE_TIER_DAILY_USD=0`, `DEMO_DAILY_USD=1`, `GLOBAL_DAILY_USD=5` — the cap
+  defaults to a real number because a kill-switch that defaults to off isn't
+  one.
+- **Tests opt into quota** — an autouse `quota_headroom` conftest fixture gives
+  the suite a generous budget so the gate only bites where a test explicitly
+  sets one (the meter-DB stance applied to money). Quota-math tests pin *both*
+  knobs: the cross-user isolation test originally tripped the global cap by
+  seeding $99 for the other user — refused for the right-wrong reason.

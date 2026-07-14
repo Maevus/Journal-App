@@ -13,6 +13,7 @@ from sqlmodel import Session
 
 from models.journal import engine
 from models.usage import LLMUsage
+from services.quota import check_quota
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -100,6 +101,9 @@ async def stream_text(
         if prompt is None:
             raise ValueError("stream_text requires either `prompt` or `messages`")
         messages = [{"role": "user", "content": prompt}]
+    # The F2 money gate: raises QuotaExceededError before any API traffic.
+    # Once per call, not per retry — a retry continues the call already allowed.
+    check_quota(user_id=user_id)
     client = _async_client()
     last_err: Exception | None = None
 
@@ -148,6 +152,7 @@ async def structured_output(
 
     `user_id`: required keyword-only billing attribution — see stream_text.
     """
+    check_quota(user_id=user_id)  # the F2 money gate — see stream_text
     client = _async_client()
     tool_name = "structured_extract"
     tool_def = {
