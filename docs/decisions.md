@@ -282,3 +282,54 @@
 - **Metering gap noticed, left for later** — `_ocr_with_claude` uses its own raw
   Anthropic client, so it bypasses `resolve_model`, `check_quota`, *and*
   `_log_usage` entirely. Pre-existing, unrelated to F3; worth a ticket.
+
+## Freemium F4 — BYO keys, encrypted at rest (2026-07-21)
+
+- **Fernet, chosen from `cryptography` (user chose, 2026-07-21)** — the de-facto
+  Python standard: authenticated symmetric encryption (AES-128-CBC + HMAC), tiny
+  API, well-audited. KMS envelope encryption was the more production-correct
+  option but cloud-coupled and premature on local SQLite; the plan is to revisit
+  it at the Postgres/deploy move. The Fernet key lives in `APP_ENCRYPTION_KEY`
+  (env) and must be **stable** across restarts (unlike the random-per-boot
+  `SESSION_SECRET`), or stored keys become undecryptable — so no random default:
+  unset means the BYO feature is simply off, surfaced as a clear error only when
+  a key is actually stored or read (`services/key_store.py`), never at startup.
+- **The key store is a deep module** — `key_store` deals in plaintext keys at its
+  interface (`store_user_key` takes one, `get_user_key` returns one); Fernet is
+  entirely internal, so no caller handles ciphertext or a cipher object. New
+  `user_api_keys` table, one row per (user, provider) with `provider` defaulting
+  `"anthropic"` — a future OpenAI/Gemini key is a new row, not a schema change,
+  the same provider-agnostic stance `LLMUsage.model` takes. New table only (no
+  `JournalEntry` change), so `create_all` handles it; no Alembic yet.
+- **The client runs on the user's own key** — `resolve_api_key(*, user_id)`
+  returns the decrypted key or None (parallel to `resolve_model` /
+  `check_quota`); `_async_client` applies the app-key env fallback in exactly one
+  place, so None cleanly means "use the app key". A BYO key flows straight into
+  client construction and is never logged.
+- **Own-key calls bypass both caps, and BYO spend is excluded from the global
+  sum (user chose query-time exclusion, 2026-07-21)** — a user paying their own
+  key touches neither the free-tier budget nor the global cap (both protect *our*
+  key), so `check_quota` exempts a key-holder before either check. Crucially, the
+  global-cap sum also *excludes* key-holders' rows (`user_id NOT IN (SELECT … FROM
+  user_api_keys)`, with `user_id IS NULL` system work always counted): otherwise
+  one BYO user running Opus — easily past the $5 global cap in a day — would
+  refuse every free-tier and system call. Chosen over an `on_app_key` column on
+  `LLMUsage` to avoid a schema migration (a stop condition; formal migrations
+  wait for Postgres per ADR 0003); under the $0 free-tier launch posture the
+  query-time approach is exactly correct, since free users spend $0 on our key.
+  BYO spend is still metered — it just doesn't gate anyone (the usage widget, F5,
+  will show a user their own spend).
+- **BYO users get the premium model** — `resolve_model` resolves a key-holder to
+  `BYO_KEY_MODEL` (Opus) instead of free-tier Haiku: they pay their own way, so
+  they get the best model. This is what makes an account first-class and lets the
+  deferred mood backfill run at Opus quality on the owner's key.
+- **Pre-call reads fail closed; the meter fails open** — `resolve_api_key`,
+  `resolve_model`'s key check, and `check_quota` all read the DB *before* the
+  call, so a DB error there refuses the call (no money spent yet), consistent
+  with F2's quota stance. Only `_log_usage`, which runs *after*, swallows its own
+  failures (the tokens are already paid for).
+- **Left for later** — a BYO generation call now does three separate key lookups
+  (`resolve_model`, `check_quota`, `resolve_api_key`); correct but consolidatable.
+  And there's still no user-facing route to *enter* a key — the mechanics are
+  wired, the front door isn't built yet (next slice; its one open decision is
+  whether to validate the key against Anthropic live on save).

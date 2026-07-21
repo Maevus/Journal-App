@@ -16,6 +16,7 @@ import config  # noqa: E402
 
 # Import models so SQLModel registers their tables before create_all
 import models.journal  # noqa: F401, E402
+import models.keys  # noqa: F401, E402
 import models.user  # noqa: F401, E402
 from models.journal import engine
 from routers import auth, chat, entries, export, ingest, search, synthesis, trends

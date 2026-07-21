@@ -62,6 +62,20 @@ FREE_TIER_DAILY_USD = float(os.getenv("FREE_TIER_DAILY_USD", "0"))
 FREE_TIER_MODEL = os.getenv("FREE_TIER_MODEL", "claude-haiku-4-5")
 DEMO_MODEL = os.getenv("DEMO_MODEL", "claude-opus-4-8")
 
+# --- Freemium BYO keys (ADR 0003, F4) ---
+# Fernet key (urlsafe-base64, 32 bytes) that encrypts users' own API keys at
+# rest. Generate one with: python -c "from cryptography.fernet import Fernet;
+# print(Fernet.generate_key().decode())". Must be STABLE across restarts (unlike
+# SESSION_SECRET) or stored keys become undecryptable — so no random default:
+# unset simply means the BYO-key feature is off (services/key_store.py raises a
+# clear error only when a key is actually stored or read, never at startup).
+# A user running Opus on their own key is what this unlocks (F4).
+APP_ENCRYPTION_KEY = os.getenv("APP_ENCRYPTION_KEY")
+
+# Which model a BYO-key user runs — they pay their own way, so they get the
+# premium model, not the free-tier default. Env-tunable like the others.
+BYO_KEY_MODEL = os.getenv("BYO_KEY_MODEL", "claude-opus-4-8")
+
 # Demo mode logs every visitor in as the seeded demo user, so the $0 free
 # tier would refuse the whole showcase (chat always, synthesis on any cache
 # miss). The demo gets its own small budget instead — bounded per day and

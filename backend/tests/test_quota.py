@@ -15,6 +15,7 @@ from sqlmodel import Session
 
 import config
 from clock import utcnow_naive
+from models.keys import UserApiKey
 from models.usage import LLMUsage
 from services.quota import QuotaExceededError, check_quota
 
@@ -30,6 +31,14 @@ def _spend(engine, *, user_id, cost, created_at=None):
         if created_at is not None:
             row.created_at = created_at
         s.add(row)
+        s.commit()
+
+
+def _give_key(engine, *, user_id):
+    """Mark a user as BYO by inserting a key row. The quota gate only checks
+    existence, so the ciphertext is a placeholder — no encryption needed here."""
+    with Session(engine) as s:
+        s.add(UserApiKey(user_id=user_id, provider="anthropic", encrypted_key=b"x"))
         s.commit()
 
 
@@ -135,6 +144,28 @@ def test_demo_mode_grants_the_demo_budget(meter_db, monkeypatch):
     _spend(meter_db, user_id=1, cost=0.50)
     with pytest.raises(QuotaExceededError):
         check_quota(user_id=1)  # $1.00 == the demo budget → exhausted
+
+
+def test_own_key_user_is_exempt_from_all_caps(meter_db, budget):
+    """A BYO user spends their own money on their own key — neither the free-tier
+    budget nor the global cap applies (both protect OUR key, not their wallet).
+    They pass even at a $0 free tier with spend far past the global cap."""
+    budget(0.0, global_usd=5.0)
+    _spend(meter_db, user_id=1, cost=99.0)
+    _give_key(meter_db, user_id=1)
+    check_quota(user_id=1)  # must not raise
+
+
+def test_byo_spend_does_not_trip_global_cap_for_others(meter_db, budget):
+    """The load-bearing F4c behavior: a BYO user's own-key spend must not refuse
+    everyone else. It isn't on our key, so it's excluded from the global sum —
+    free-tier users and system work still pass despite a huge BYO spend."""
+    budget(10.0, global_usd=5.0)
+    _give_key(meter_db, user_id=2)
+    _spend(meter_db, user_id=2, cost=99.0)  # BYO user, own key
+
+    check_quota(user_id=1)     # free-tier user: not refused by BYO spend
+    check_quota(user_id=None)  # system work: not refused either
 
 
 def test_fails_closed_when_the_check_itself_breaks(budget, monkeypatch):

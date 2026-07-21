@@ -39,7 +39,7 @@ class _FakeStream:
 
 def _fake_streaming_client(monkeypatch):
     fake = SimpleNamespace(messages=SimpleNamespace(stream=lambda **kw: _FakeStream()))
-    monkeypatch.setattr(llm, "_async_client", lambda: fake)
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: fake)
 
 
 class _Out(BaseModel):
@@ -56,7 +56,7 @@ def _fake_tool_client(monkeypatch):
         return response
 
     fake = SimpleNamespace(messages=SimpleNamespace(create=create))
-    monkeypatch.setattr(llm, "_async_client", lambda: fake)
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: fake)
 
 
 def _rows(engine):
@@ -100,16 +100,21 @@ def test_llm_calls_without_attribution_are_impossible():
 
 async def test_meter_failure_never_kills_the_call(monkeypatch, meter_db):
     """A failed meter INSERT after a successful stream must log, not blow up
-    the SSE mid-flight. (Quota, in F2, fails closed — but it runs BEFORE the
-    call, so nothing is lost by this leniency.)"""
+    the SSE mid-flight. (Quota and BYO-key resolution, in F2/F4, fail closed —
+    but they run BEFORE the call, so nothing is lost by the meter's leniency.)"""
     _fake_streaming_client(monkeypatch)
+    # Model + key resolution are separate pre-call DB reads; sidestep both (an
+    # explicit model skips resolve_model, and this stub skips resolve_api_key's
+    # lookup) so the boom below targets only the meter, which is this test's
+    # subject. Those pre-call reads fail closed on their own; the meter fails open.
+    monkeypatch.setattr(llm, "resolve_api_key", lambda **k: None)
 
     def boom(*a, **k):
         raise RuntimeError("db locked")
 
     monkeypatch.setattr(llm, "Session", boom)
 
-    tokens = [t async for t in llm.stream_text(prompt="hi", user_id=1)]
+    tokens = [t async for t in llm.stream_text(prompt="hi", model="claude-haiku-4-5", user_id=1)]
 
     assert tokens == ["hel", "lo"]  # the stream still completed
 

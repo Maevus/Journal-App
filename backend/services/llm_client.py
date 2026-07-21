@@ -14,6 +14,7 @@ from sqlmodel import Session
 import config
 from models.journal import engine
 from models.usage import LLMUsage
+from services import key_store
 from services.quota import check_quota
 
 T = TypeVar("T", bound=BaseModel)
@@ -52,12 +53,33 @@ def resolve_model(*, user_id: Optional[int]) -> str:
     if user_id is None:
         raise ValueError("no owner: unowned system work does not generate (F3)")
     # In demo mode every visitor is the seeded demo user, so the mode picks the
-    # model. Per-user model config (a user's own key/model) arrives with F4.
-    return config.DEMO_MODEL if config.IS_DEMO else config.FREE_TIER_MODEL
+    # model — the showcase stays on the premium model regardless.
+    if config.IS_DEMO:
+        return config.DEMO_MODEL
+    # F4: a user on their own key pays their own way, so they get the premium
+    # model, not the free-tier default. This is the first-class account payoff.
+    with Session(engine) as session:
+        if key_store.has_user_key(session, user_id=user_id):
+            return config.BYO_KEY_MODEL
+    return config.FREE_TIER_MODEL
 
 
-def _async_client() -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+def resolve_api_key(*, user_id: Optional[int]) -> Optional[str]:
+    """The user's own decrypted API key, or None if they haven't set one (F4).
+
+    None means "fall back to the app key" — the env fallback lives in
+    _async_client so the app-key default is defined in exactly one place. A BYO
+    key flows straight into client construction and is never logged.
+    """
+    if user_id is None:
+        return None
+    with Session(engine) as session:
+        return key_store.get_user_key(session, user_id=user_id)
+
+
+def _async_client(api_key: Optional[str] = None) -> anthropic.AsyncAnthropic:
+    """Build the SDK client on the given key, or the app env key if None."""
+    return anthropic.AsyncAnthropic(api_key=api_key or os.environ["ANTHROPIC_API_KEY"])
 
 
 def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Optional[int]) -> None:
@@ -129,7 +151,7 @@ async def stream_text(
     # The F2 money gate: raises QuotaExceededError before any API traffic.
     # Once per call, not per retry — a retry continues the call already allowed.
     check_quota(user_id=user_id)
-    client = _async_client()
+    client = _async_client(resolve_api_key(user_id=user_id))  # F4: own key if set
     last_err: Exception | None = None
 
     for attempt in range(max_retries):
@@ -180,7 +202,7 @@ async def structured_output(
     if model is None:  # F3: resolve per-user; see stream_text
         model = resolve_model(user_id=user_id)
     check_quota(user_id=user_id)  # the F2 money gate — see stream_text
-    client = _async_client()
+    client = _async_client(resolve_api_key(user_id=user_id))  # F4: own key if set
     tool_name = "structured_extract"
     tool_def = {
         "name": tool_name,

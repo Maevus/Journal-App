@@ -9,6 +9,7 @@ from sqlmodel import Session, SQLModel, create_engine
 
 import services.ingestion as ingestion
 from models.journal import JournalEntry
+from models.keys import UserApiKey  # noqa: F401 — registers the key table for create_all
 from models.usage import LLMUsage  # noqa: F401 — registers the usage table for create_all
 from models.user import User  # noqa: F401 — registers the users table for create_all
 

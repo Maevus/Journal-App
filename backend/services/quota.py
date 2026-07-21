@@ -8,12 +8,15 @@ import json
 import logging
 from typing import Optional
 
+from sqlalchemy import or_
 from sqlmodel import Session, func, select
 
 import config
 from clock import utcnow_naive
 from models.journal import engine
+from models.keys import UserApiKey
 from models.usage import LLMUsage
+from services import key_store
 
 logger = logging.getLogger(__name__)
 
@@ -49,11 +52,26 @@ def check_quota(*, user_id: Optional[int]) -> None:
     day_start = _utc_day_start()
     try:
         with Session(engine) as session:
-            # Global cap first — the kill-switch bounds the worst day our key
-            # can have, so it applies to every call, system work included.
+            # F4: a user on their own key spends their own money on their own
+            # key — neither cap applies (both protect OUR key). Exempt them
+            # before touching either cap.
+            if user_id is not None and key_store.has_user_key(session, user_id=user_id):
+                return
+            # Global cap — the kill-switch bounding the worst day our key can
+            # have, so it applies to every call, system work included. It sums
+            # only spend on OUR key: BYO users' own-key spend is metered for
+            # their usage widget but must not refuse everyone else (F4c), so
+            # rows from key-holders are excluded. `user_id IS NULL` (system
+            # work) is always on our key, so it counts.
             global_spent = session.exec(
                 select(func.coalesce(func.sum(LLMUsage.cost), 0.0))
                 .where(LLMUsage.created_at >= day_start)
+                .where(
+                    or_(
+                        LLMUsage.user_id.is_(None),
+                        LLMUsage.user_id.not_in(select(UserApiKey.user_id)),
+                    )
+                )
             ).one()
             if global_spent >= config.GLOBAL_DAILY_USD:
                 raise QuotaExceededError(

@@ -5,10 +5,14 @@ from types import SimpleNamespace
 import anthropic
 import httpx
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import BaseModel
+from sqlmodel import Session
 
 import config
+import services.key_store as key_store
 import services.llm_client as llm
+from models.keys import UserApiKey
 from services.quota import QuotaExceededError
 
 
@@ -112,8 +116,51 @@ def test_async_client_uses_env_key(monkeypatch):
     monkeypatch.setattr(
         llm.anthropic, "AsyncAnthropic", lambda api_key=None: captured.update(key=api_key)
     )
-    llm._async_client()
+    llm._async_client()  # no key passed → the app env key
     assert captured["key"] == "sk-test-123"
+
+
+def test_async_client_prefers_a_passed_key(monkeypatch):
+    """A resolved BYO key overrides the app env key when building the client."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-app")
+    captured = {}
+    monkeypatch.setattr(
+        llm.anthropic, "AsyncAnthropic", lambda api_key=None: captured.update(key=api_key)
+    )
+    llm._async_client("sk-user-own")
+    assert captured["key"] == "sk-user-own"
+
+
+# --- resolve_api_key (F4: BYO keys route calls to the user's own key) -------
+
+def test_resolve_api_key_returns_the_users_own_key(monkeypatch, meter_db):
+    monkeypatch.setattr(config, "APP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with Session(meter_db) as s:
+        key_store.store_user_key(s, user_id=1, raw_key="sk-ant-user-own")
+    assert llm.resolve_api_key(user_id=1) == "sk-ant-user-own"
+
+
+def test_resolve_api_key_is_none_without_a_stored_key(meter_db):
+    """A free-tier user has no key → None, and _async_client falls back to the
+    app key. No env read here, so the app-key fallback stays in one place."""
+    assert llm.resolve_api_key(user_id=1) is None
+
+
+async def test_stream_text_runs_on_the_users_own_key(monkeypatch, meter_db):
+    """End to end: a user with a stored key has their call built on that key."""
+    monkeypatch.setattr(config, "APP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with Session(meter_db) as s:
+        key_store.store_user_key(s, user_id=1, raw_key="sk-ant-user-own")
+
+    seen = {}
+
+    def spy_client(api_key=None):
+        seen["api_key"] = api_key
+        return _client(_FakeMessages(stream_cm=_FakeTextStream(["hi"])))
+
+    monkeypatch.setattr(llm, "_async_client", spy_client)
+    [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert seen["api_key"] == "sk-ant-user-own"
 
 
 # --- resolve_model (F3: per-user model resolution) -------------------------
@@ -131,6 +178,15 @@ def test_resolve_model_demo_is_premium(monkeypatch):
     assert llm.resolve_model(user_id=1) == "claude-opus-4-8"
 
 
+def test_resolve_model_byo_user_gets_premium(meter_db):
+    """A user on their own key pays their own way, so they resolve to the
+    premium model — not the free-tier Haiku (F4, first-class account)."""
+    with Session(meter_db) as s:
+        s.add(UserApiKey(user_id=1, provider="anthropic", encrypted_key=b"x"))
+        s.commit()
+    assert llm.resolve_model(user_id=1) == "claude-opus-4-8"
+
+
 def test_resolve_model_refuses_unowned_system_work():
     """No owner, no generation. Mood scoring for unowned rows must not spend on
     the app key — resolution enforces it rather than trusting a convention."""
@@ -142,7 +198,7 @@ async def test_stream_text_resolves_model_when_unspecified(monkeypatch, capsys):
     """No explicit model → the entry point resolves per-user, and that same
     string reaches both the API call and the meter (the F3 billing invariant)."""
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["hi"]))
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert msgs.last_model == "claude-haiku-4-5"  # API got the resolved model
     assert "model=claude-haiku-4-5" in capsys.readouterr().out  # meter did too
@@ -153,7 +209,7 @@ async def test_structured_output_resolves_model_when_unspecified(monkeypatch, ca
     reaches the API and the meter."""
     block = SimpleNamespace(type="tool_use", name="structured_extract", input={"score": 0.5, "reasoning": "y"})
     msgs = _FakeMessages(create_side_effect=[_resp(block)])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     await llm.structured_output("prompt", _Schema, user_id=1)
     assert msgs.last_model == "claude-haiku-4-5"
     assert "model=claude-haiku-4-5" in capsys.readouterr().out
@@ -163,7 +219,7 @@ async def test_stream_text_honours_explicit_model(monkeypatch):
     """Task-fixed callers (OCR, date-parse, condense) pass their own model and
     it is honored as-is — resolution never overrides an explicit choice."""
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["hi"]))
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     [tok async for tok in llm.stream_text("prompt", model="claude-sonnet-4-6", user_id=1)]
     assert msgs.last_model == "claude-sonnet-4-6"
 
@@ -172,7 +228,7 @@ async def test_stream_text_honours_explicit_model(monkeypatch):
 
 async def test_stream_text_yields_tokens(monkeypatch):
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["Hello", " world"]))
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     out = [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert out == ["Hello", " world"]
     assert msgs.stream_calls == 1
@@ -181,7 +237,7 @@ async def test_stream_text_yields_tokens(monkeypatch):
 async def test_stream_text_retries_on_connection_error(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     msgs = _FakeMessages(stream_side_effect=[_conn_error, lambda: _FakeTextStream(["ok"])])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     out = [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert out == ["ok"]
     assert msgs.stream_calls == 2  # retried once
@@ -201,14 +257,14 @@ def _resp(*blocks):
 async def test_structured_output_extracts_tool_use(monkeypatch):
     block = SimpleNamespace(type="tool_use", name="structured_extract", input={"score": 0.8, "reasoning": "x"})
     msgs = _FakeMessages(create_side_effect=[_resp(block)])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     result = await llm.structured_output("prompt", _Schema, user_id=1)
     assert result.score == 0.8 and result.reasoning == "x"
 
 
 async def test_structured_output_raises_without_tool_use(monkeypatch):
     msgs = _FakeMessages(create_side_effect=[_resp(SimpleNamespace(type="text"))])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     with pytest.raises(ValueError):
         await llm.structured_output("prompt", _Schema, user_id=1)
 
@@ -219,7 +275,7 @@ async def test_structured_output_retries(monkeypatch):
     msgs = _FakeMessages(
         create_side_effect=[anthropic.APIConnectionError(request=httpx.Request("POST", "http://t")), _resp(block)]
     )
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     result = await llm.structured_output("prompt", _Schema, user_id=1)
     assert result.score == 0.5
     assert msgs.create_calls == 2
@@ -228,7 +284,7 @@ async def test_structured_output_retries(monkeypatch):
 async def test_stream_text_raises_after_exhausting_retries(monkeypatch):
     monkeypatch.setattr(asyncio, "sleep", _no_sleep)
     msgs = _FakeMessages(stream_side_effect=[_conn_error, _conn_error, _conn_error])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     with pytest.raises(anthropic.APIConnectionError):
         [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert msgs.stream_calls == 3
@@ -239,7 +295,7 @@ async def test_stream_text_refuses_over_budget_before_any_api_call(monkeypatch):
     zero API traffic — not one token, not one connection attempt."""
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.0)
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["never"]))
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     with pytest.raises(QuotaExceededError):
         [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert msgs.stream_calls == 0
@@ -249,7 +305,7 @@ async def test_structured_output_refuses_over_budget_before_any_api_call(monkeyp
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.0)
     block = SimpleNamespace(type="tool_use", name="structured_extract", input={"score": 1, "reasoning": "z"})
     msgs = _FakeMessages(create_side_effect=[_resp(block)])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     with pytest.raises(QuotaExceededError):
         await llm.structured_output("prompt", _Schema, user_id=1)
     assert msgs.create_calls == 0
@@ -262,7 +318,7 @@ async def test_structured_output_raises_after_exhausting_retries(monkeypatch):
         return anthropic.APIConnectionError(request=httpx.Request("POST", "http://t"))
 
     msgs = _FakeMessages(create_side_effect=[err(), err(), err()])
-    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
     with pytest.raises(anthropic.APIConnectionError):
         await llm.structured_output("prompt", _Schema, user_id=1)
     assert msgs.create_calls == 3

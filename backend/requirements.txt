@@ -14,6 +14,7 @@ watchdog>=4.0.0
 pypdf>=4.0.0
 authlib>=1.7.0
 itsdangerous>=2.0.0  # SessionMiddleware cookie signing (in-flight OAuth state)
+cryptography>=42.0.0  # Fernet encryption for BYO API keys at rest (F4)
 
 # Testing
 pytest>=8.0.0
