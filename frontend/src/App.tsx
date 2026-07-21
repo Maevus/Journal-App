@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import './App.css'
 import { exportUrl } from './api/client'
+import { ApiKeyPanel } from './components/ApiKeyPanel'
 import { AuthWidget } from './components/AuthWidget'
 import { ChatPanel } from './components/ChatPanel'
 import { LoginGate } from './components/LoginGate'
@@ -100,6 +101,16 @@ function App() {
           </span>
           <div className="card-brutal p-6 pt-8">
             <ChatPanel />
+          </div>
+        </section>
+
+        {/* Account: bring-your-own Anthropic key → run Opus on your own key */}
+        <section className="relative mt-8">
+          <span className="sticker absolute -top-3 left-6 z-10 -rotate-1 bg-ink px-3 py-1 text-xs text-white">
+            API key
+          </span>
+          <div className="card-brutal p-6 pt-8">
+            <ApiKeyPanel />
           </div>
         </section>
       </main>

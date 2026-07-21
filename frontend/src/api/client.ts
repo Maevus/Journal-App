@@ -158,6 +158,44 @@ export async function logout(): Promise<void> {
   if (!res.ok) throw new Error(`Logout failed: ${res.statusText}`)
 }
 
+/** Whether the logged-in user has stored their own Anthropic key (GET /keys).
+ *  Returns only a boolean — the endpoint never returns key material. */
+export async function fetchKeyStatus(): Promise<{ has_key: boolean; provider: string }> {
+  const res = await fetch(`${BASE_URL}/keys`, { credentials: 'include' })
+  reportIfAuthExpired(res)
+  if (!res.ok) throw new Error(`Key status failed: ${res.statusText}`)
+  return res.json() as Promise<{ has_key: boolean; provider: string }>
+}
+
+/** Validate a BYO key against Anthropic and store it encrypted (POST /keys).
+ *  On rejection the backend's message is surfaced (e.g. "Anthropic rejected
+ *  that API key") so the form can show why. */
+export async function saveApiKey(apiKey: string): Promise<void> {
+  const res = await fetch(`${BASE_URL}/keys`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ api_key: apiKey }),
+  })
+  reportIfAuthExpired(res)
+  if (!res.ok) {
+    let detail: string | undefined
+    try {
+      detail = ((await res.json()) as { detail?: string }).detail
+    } catch {
+      /* no JSON body */
+    }
+    throw new Error(detail ?? `Saving the key failed: ${res.statusText}`)
+  }
+}
+
+/** Remove the stored key, reverting the user to the free tier (DELETE /keys). */
+export async function deleteApiKey(): Promise<void> {
+  const res = await fetch(`${BASE_URL}/keys`, { method: 'DELETE', credentials: 'include' })
+  reportIfAuthExpired(res)
+  if (!res.ok) throw new Error(`Removing the key failed: ${res.statusText}`)
+}
+
 export function exportUrl(format: 'csv' | 'json', source: string | null = null): string {
   // source=null → all sources. Used as an <a href download> target — a top-level
   // navigation, so the SameSite=Lax session cookie is sent without any fetch options.

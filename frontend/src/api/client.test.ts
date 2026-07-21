@@ -3,13 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   AUTH_EXPIRED_EVENT,
   chatStreamUrl,
+  deleteApiKey,
   exportUrl,
   fetchEntriesByDate,
+  fetchKeyStatus,
   fetchMe,
   fetchTrends,
   ingestEntries,
   loginUrl,
   logout,
+  saveApiKey,
   searchEntries,
   sourceNoteUrl,
   synthesisUrl,
@@ -118,6 +121,38 @@ describe('ingestEntries', () => {
   it('throws on failure', async () => {
     mockFetch(null, false, 'Bad Request')
     await expect(ingestEntries(['a'])).rejects.toThrow(/Ingest failed/)
+  })
+})
+
+describe('BYO API key', () => {
+  it('fetchKeyStatus GETs /keys with the cookie', async () => {
+    const fn = mockFetch({ has_key: true, provider: 'anthropic' })
+    expect(await fetchKeyStatus()).toEqual({ has_key: true, provider: 'anthropic' })
+    expect(fn).toHaveBeenCalledWith(`${BASE}/keys`, { credentials: 'include' })
+  })
+
+  it('saveApiKey POSTs the key with the cookie', async () => {
+    const fn = mockFetch({ provider: 'anthropic', status: 'saved' })
+    await saveApiKey('sk-ant-x')
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe(`${BASE}/keys`)
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('include')
+    expect(JSON.parse(init.body)).toEqual({ api_key: 'sk-ant-x' })
+  })
+
+  it('saveApiKey surfaces the backend rejection message', async () => {
+    mockFetch({ detail: 'Anthropic rejected that API key' }, false, 'Bad Request')
+    await expect(saveApiKey('sk-ant-bad')).rejects.toThrow(/Anthropic rejected/)
+  })
+
+  it('deleteApiKey DELETEs /keys with the cookie', async () => {
+    const fn = mockFetch({ status: 'removed' })
+    await deleteApiKey()
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe(`${BASE}/keys`)
+    expect(init.method).toBe('DELETE')
+    expect(init.credentials).toBe('include')
   })
 })
 
