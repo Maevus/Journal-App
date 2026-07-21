@@ -131,6 +131,39 @@ def test_async_client_prefers_a_passed_key(monkeypatch):
     assert captured["key"] == "sk-user-own"
 
 
+# --- key_is_valid (F4: validate a BYO key against Anthropic on save) --------
+
+async def test_key_is_valid_true_when_the_key_authenticates(monkeypatch):
+    """A models.list() call authenticates the key without spending on
+    generation — success means the key works."""
+    async def ok_list():
+        return SimpleNamespace(data=[])
+
+    fake = SimpleNamespace(models=SimpleNamespace(list=ok_list))
+    seen = {}
+
+    def build(api_key=None):
+        seen["api_key"] = api_key
+        return fake
+
+    monkeypatch.setattr(llm, "_async_client", build)
+    assert await llm.key_is_valid("sk-ant-good") is True
+    assert seen["api_key"] == "sk-ant-good"  # validated on the user's key, not the app's
+
+
+async def test_key_is_valid_false_on_auth_error(monkeypatch):
+    async def bad_list():
+        raise anthropic.AuthenticationError(
+            "invalid key",
+            response=httpx.Response(401, request=httpx.Request("GET", "http://t")),
+            body=None,
+        )
+
+    fake = SimpleNamespace(models=SimpleNamespace(list=bad_list))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: fake)
+    assert await llm.key_is_valid("sk-ant-bad") is False
+
+
 # --- resolve_api_key (F4: BYO keys route calls to the user's own key) -------
 
 def test_resolve_api_key_returns_the_users_own_key(monkeypatch, meter_db):

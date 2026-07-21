@@ -38,6 +38,19 @@ def test_get_user_key_is_none_when_unset(session):
     assert key_store.get_user_key(session, user_id=99) is None
 
 
+def test_remove_user_key_deletes_it(session):
+    key_store.store_user_key(session, user_id=1, raw_key="sk-ant-x")
+    key_store.remove_user_key(session, user_id=1)
+
+    assert key_store.get_user_key(session, user_id=1) is None
+    assert key_store.has_user_key(session, user_id=1) is False
+
+
+def test_remove_user_key_is_idempotent(session):
+    """Removing a key that isn't there is a no-op, not an error."""
+    key_store.remove_user_key(session, user_id=404)  # must not raise
+
+
 def test_store_user_key_overwrites_in_place(session):
     """Re-entering a key replaces the old one; it never accumulates rows."""
     key_store.store_user_key(session, user_id=1, raw_key="sk-ant-first")

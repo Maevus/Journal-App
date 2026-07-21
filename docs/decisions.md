@@ -328,8 +328,16 @@
   call, so a DB error there refuses the call (no money spent yet), consistent
   with F2's quota stance. Only `_log_usage`, which runs *after*, swallows its own
   failures (the tokens are already paid for).
+- **Key entry validates against Anthropic on save (user chose, 2026-07-21)** —
+  `POST /keys` (`routers/keys.py`) validates a key with a real auth check before
+  storing it, so a typo or revoked key fails *now* with a clear 400 rather than
+  as a silent failure on the user's first synthesis. The check is
+  `llm_client.key_is_valid` → `models.list()`, which authenticates the key but
+  generates nothing, so validation costs no output tokens; only
+  `AuthenticationError` means "bad key" (other errors propagate as "couldn't
+  check right now", not a false rejection). The route also exposes `GET /keys`
+  (a `has_key` boolean only — no key material) and `DELETE /keys` (revert to the
+  free tier). Guards: 401 unauthenticated, 403 in demo (shared account), 503 if
+  `APP_ENCRYPTION_KEY` is unset; the raw key is never echoed in any response.
 - **Left for later** — a BYO generation call now does three separate key lookups
   (`resolve_model`, `check_quota`, `resolve_api_key`); correct but consolidatable.
-  And there's still no user-facing route to *enter* a key — the mechanics are
-  wired, the front door isn't built yet (next slice; its one open decision is
-  whether to validate the key against Anthropic live on save).

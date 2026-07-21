@@ -58,6 +58,19 @@ def has_user_key(db: Session, *, user_id: int, provider: str = "anthropic") -> b
     return row is not None
 
 
+def remove_user_key(db: Session, *, user_id: int, provider: str = "anthropic") -> None:
+    """Delete `user_id`'s stored key for `provider`. Idempotent — removing a key
+    that isn't there is a no-op. Reverts the user to the app key / free tier."""
+    row = db.exec(
+        select(UserApiKey)
+        .where(UserApiKey.user_id == user_id)
+        .where(UserApiKey.provider == provider)
+    ).first()
+    if row is not None:
+        db.delete(row)
+        db.commit()
+
+
 def get_user_key(db: Session, *, user_id: int, provider: str = "anthropic") -> Optional[str]:
     """The plaintext key for `user_id`/`provider`, or None if they haven't set one."""
     row = db.exec(

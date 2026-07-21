@@ -82,6 +82,21 @@ def _async_client(api_key: Optional[str] = None) -> anthropic.AsyncAnthropic:
     return anthropic.AsyncAnthropic(api_key=api_key or os.environ["ANTHROPIC_API_KEY"])
 
 
+async def key_is_valid(raw_key: str) -> bool:
+    """Whether a provider key authenticates (F4 — validate a BYO key on save).
+
+    Uses models.list(), which authenticates the key but generates nothing, so
+    validation costs no output tokens. A rejected key raises AuthenticationError
+    (→ False); other errors (network, rate limit) propagate so the caller can
+    distinguish "bad key" from "couldn't check right now".
+    """
+    try:
+        await _async_client(raw_key).models.list()
+        return True
+    except anthropic.AuthenticationError:
+        return False
+
+
 def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Optional[int]) -> None:
     """Meter one finished LLM call: operator log line + a persisted LLMUsage row.
 
