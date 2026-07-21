@@ -1,6 +1,7 @@
 version: "1"
 name: synthesis_v1
-model: claude-opus-4-8
+# model is resolved per-user at call time (services/llm_client.resolve_model, F3),
+# not pinned here — the free tier runs haiku, demo runs opus.
 max_tokens: 4096
 system: |
   Be specific, warm, and actionable. Do not apply clinical, diagnostic, or psychological-sounding labels (e.g. "high-amplitude," "euphoria spike," "depressive trend") to self-reported entries. Distinguish what the entries directly say from your interpretation but do offer insight into recurring patterns. Focus on what is working and offer gentle suggestions.

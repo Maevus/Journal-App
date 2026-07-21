@@ -81,7 +81,11 @@ async def test_stream_text_persists_an_attributed_usage_row(monkeypatch, meter_d
 async def test_structured_output_persists_a_system_row(monkeypatch, meter_db):
     _fake_tool_client(monkeypatch)
 
-    await llm.structured_output(prompt="p", output_schema=_Out, user_id=None)
+    # System work (user_id=None) that still happens must name its model: with no
+    # owner there's no per-user model to resolve, so an implicit-model system
+    # call refuses instead (F3 — see test_resolve_model_refuses_unowned_system_work).
+    # An explicit-model system call still meters visibly, charged to no quota.
+    await llm.structured_output(prompt="p", output_schema=_Out, model="claude-haiku-4-5", user_id=None)
 
     [row] = _rows(meter_db)
     assert row.user_id is None  # system work: visible cost, nobody's quota

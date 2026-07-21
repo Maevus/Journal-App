@@ -47,15 +47,18 @@ class _FakeMessages:
         self._create_side_effect = create_side_effect
         self.stream_calls = 0
         self.create_calls = 0
+        self.last_model = None  # the model string the API actually received
 
     def stream(self, **kwargs):
         self.stream_calls += 1
+        self.last_model = kwargs.get("model")
         if self._stream_side_effect is not None:
             return self._stream_side_effect.pop(0)()  # callable: returns cm or raises
         return self._stream_cm
 
     async def create(self, **kwargs):
         self.create_calls += 1
+        self.last_model = kwargs.get("model")
         item = self._create_side_effect.pop(0)
         if isinstance(item, Exception):
             raise item
@@ -111,6 +114,58 @@ def test_async_client_uses_env_key(monkeypatch):
     )
     llm._async_client()
     assert captured["key"] == "sk-test-123"
+
+
+# --- resolve_model (F3: per-user model resolution) -------------------------
+
+def test_resolve_model_free_tier_is_haiku():
+    """A free-tier user resolves to the cheap model, not opus. This is the
+    string that must later reach both the API call and _log_usage."""
+    assert llm.resolve_model(user_id=1) == "claude-haiku-4-5"
+
+
+def test_resolve_model_demo_is_premium(monkeypatch):
+    """Demo mode runs the showcase on the premium model, bounded by the demo
+    budget — the whole point of the separate DEMO_MODEL knob."""
+    monkeypatch.setattr(config, "IS_DEMO", True)
+    assert llm.resolve_model(user_id=1) == "claude-opus-4-8"
+
+
+def test_resolve_model_refuses_unowned_system_work():
+    """No owner, no generation. Mood scoring for unowned rows must not spend on
+    the app key — resolution enforces it rather than trusting a convention."""
+    with pytest.raises(ValueError):
+        llm.resolve_model(user_id=None)
+
+
+async def test_stream_text_resolves_model_when_unspecified(monkeypatch, capsys):
+    """No explicit model → the entry point resolves per-user, and that same
+    string reaches both the API call and the meter (the F3 billing invariant)."""
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["hi"]))
+    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert msgs.last_model == "claude-haiku-4-5"  # API got the resolved model
+    assert "model=claude-haiku-4-5" in capsys.readouterr().out  # meter did too
+
+
+async def test_structured_output_resolves_model_when_unspecified(monkeypatch, capsys):
+    """Mood scoring passes no model → resolves per-user; the resolved string
+    reaches the API and the meter."""
+    block = SimpleNamespace(type="tool_use", name="structured_extract", input={"score": 0.5, "reasoning": "y"})
+    msgs = _FakeMessages(create_side_effect=[_resp(block)])
+    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    await llm.structured_output("prompt", _Schema, user_id=1)
+    assert msgs.last_model == "claude-haiku-4-5"
+    assert "model=claude-haiku-4-5" in capsys.readouterr().out
+
+
+async def test_stream_text_honours_explicit_model(monkeypatch):
+    """Task-fixed callers (OCR, date-parse, condense) pass their own model and
+    it is honored as-is — resolution never overrides an explicit choice."""
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["hi"]))
+    monkeypatch.setattr(llm, "_async_client", lambda: _client(msgs))
+    [tok async for tok in llm.stream_text("prompt", model="claude-sonnet-4-6", user_id=1)]
+    assert msgs.last_model == "claude-sonnet-4-6"
 
 
 # --- stream_text -----------------------------------------------------------

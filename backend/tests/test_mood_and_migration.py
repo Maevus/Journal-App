@@ -83,6 +83,30 @@ async def test_score_mood_swallows_errors(mood_engine, monkeypatch):
         assert e.mood_reasoning is None
 
 
+async def test_score_mood_skips_unowned_rows_without_calling_llm(
+    mood_engine, monkeypatch, caplog
+):
+    """An unowned row (user_id=None) has no owner to bill, so mood scoring must
+    not run at all (F3): the LLM is never called, the entry stays unscored, and
+    the skip is INFO — an intentional decision, not a failure."""
+    eid = _make_entry(mood_engine)
+    called = False
+
+    async def must_not_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        return ingestion._MoodScore(score=0.5, reasoning="nope")
+
+    monkeypatch.setattr("services.llm_client.structured_output", must_not_run)
+    with caplog.at_level("INFO", logger="services.ingestion"):
+        await ingestion.score_mood_background(eid, "x", user_id=None)
+
+    assert called is False  # no owner → no LLM call → no spend
+    with Session(mood_engine) as s:
+        assert s.get(JournalEntry, eid).mood_score is None
+    assert not any(r.levelname == "WARNING" for r in caplog.records)  # skip, not failure
+
+
 async def test_score_mood_quota_skip_is_logged_as_skip_not_failure(
     mood_engine, monkeypatch, caplog
 ):

@@ -11,6 +11,7 @@ import anthropic
 from pydantic import BaseModel
 from sqlmodel import Session
 
+import config
 from models.journal import engine
 from models.usage import LLMUsage
 from services.quota import check_quota
@@ -18,8 +19,6 @@ from services.quota import check_quota
 T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_MODEL = "claude-opus-4-8"
 
 # Approximate pricing as ($ input, $ output) per token, keyed by model. Unknown
 # models fall back to the default (opus) rates. This whole table becomes per-user
@@ -35,6 +34,26 @@ _RETRYABLE = (
     anthropic.APIConnectionError,
     anthropic.APITimeoutError,
 )
+
+
+def resolve_model(*, user_id: Optional[int]) -> str:
+    """Which model a generation call for `user_id` runs on (ADR 0003, F3).
+
+    The per-user resolution step that replaces the prompt-YAML model choice
+    for user-facing generation (synthesis, chat, mood scoring).
+    Task-fixed internal calls (OCR, date-parse, condense) still pass their own
+    model string and never reach here.
+
+    `user_id` is required keyword-only, mirroring check_quota / _log_usage, so
+    resolution joins quota and metering as the third per-call step. None means
+    unowned system work, which no longer generates — it raises here rather than
+    silently spending the app key on a model nobody owns.
+    """
+    if user_id is None:
+        raise ValueError("no owner: unowned system work does not generate (F3)")
+    # In demo mode every visitor is the seeded demo user, so the mode picks the
+    # model. Per-user model config (a user's own key/model) arrives with F4.
+    return config.DEMO_MODEL if config.IS_DEMO else config.FREE_TIER_MODEL
 
 
 def _async_client() -> anthropic.AsyncAnthropic:
@@ -75,7 +94,7 @@ def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Op
 async def stream_text(
     prompt: str | None = None,
     system: str = "",
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     max_tokens: int = 1024,
     max_retries: int = 3,
     messages: list[dict] | None = None,
@@ -101,6 +120,12 @@ async def stream_text(
         if prompt is None:
             raise ValueError("stream_text requires either `prompt` or `messages`")
         messages = [{"role": "user", "content": prompt}]
+    # F3: an unspecified model resolves per-user (free→haiku, demo→opus). An
+    # explicit model (task-fixed callers: OCR, date-parse, condense) is honored.
+    # The one `model` variable then flows to both the API call and _log_usage,
+    # so what's billed is always what ran.
+    if model is None:
+        model = resolve_model(user_id=user_id)
     # The F2 money gate: raises QuotaExceededError before any API traffic.
     # Once per call, not per retry — a retry continues the call already allowed.
     check_quota(user_id=user_id)
@@ -140,7 +165,7 @@ async def structured_output(
     prompt: str,
     output_schema: Type[T],
     system: str = "",
-    model: str = DEFAULT_MODEL,
+    model: str | None = None,
     max_tokens: int = 512,
     max_retries: int = 3,
     *,
@@ -152,6 +177,8 @@ async def structured_output(
 
     `user_id`: required keyword-only billing attribution — see stream_text.
     """
+    if model is None:  # F3: resolve per-user; see stream_text
+        model = resolve_model(user_id=user_id)
     check_quota(user_id=user_id)  # the F2 money gate — see stream_text
     client = _async_client()
     tool_name = "structured_extract"

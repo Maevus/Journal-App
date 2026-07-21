@@ -12,7 +12,7 @@ from sqlmodel import Session
 from models.journal import get_session
 from models.user import User
 from services.auth import get_current_user
-from services.llm_client import DEFAULT_MODEL, stream_text
+from services.llm_client import resolve_model, stream_text
 from services.quota import QuotaExceededError, sse_quota_frame
 from services.retrieval import condense_query, hybrid_search, parse_date_range
 
@@ -126,7 +126,7 @@ async def chat(
     # Prior turns as real user/assistant messages, then the current question as a
     # user turn carrying the retrieved entries.
     llm_messages = history + [{"role": "user", "content": user_prompt}]
-    model = cfg.get("model", DEFAULT_MODEL)
+    model = resolve_model(user_id=user.id)  # F3: per-user, not the prompt-YAML value
     max_tokens = cfg.get("max_tokens", 2048)
 
     async def event_stream():

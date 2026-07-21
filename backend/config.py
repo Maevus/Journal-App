@@ -53,6 +53,15 @@ GOODNOTES_SCAN_INTERVAL_MIN = int(os.getenv("GOODNOTES_SCAN_INTERVAL_MIN", "0"))
 # later is an env change, not a redesign.
 FREE_TIER_DAILY_USD = float(os.getenv("FREE_TIER_DAILY_USD", "0"))
 
+# --- Freemium model resolution (ADR 0003, F3) ---
+# Which model each tier runs. The free tier gets the cheap model; the demo
+# showcase gets the premium one (bounded by DEMO_DAILY_USD + the global cap).
+# Env-tunable, and provider-shaped as a plain string so per-user model config
+# (F4, BYO keys) slots in without a redesign. Pricing stays data-driven in
+# llm_client._PRICING, keyed on whatever string resolves here.
+FREE_TIER_MODEL = os.getenv("FREE_TIER_MODEL", "claude-haiku-4-5")
+DEMO_MODEL = os.getenv("DEMO_MODEL", "claude-opus-4-8")
+
 # Demo mode logs every visitor in as the seeded demo user, so the $0 free
 # tier would refuse the whole showcase (chat always, synthesis on any cache
 # miss). The demo gets its own small budget instead — bounded per day and

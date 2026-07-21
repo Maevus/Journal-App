@@ -244,3 +244,41 @@
   sets one (the meter-DB stance applied to money). Quota-math tests pin *both*
   knobs: the cross-user isolation test originally tripped the global cap by
   seeding $99 for the other user — refused for the right-wrong reason.
+
+## Freemium F3 — per-user model resolution (2026-07-21)
+
+- **Resolution is the third per-call step, beside quota and the meter** —
+  `services/llm_client.py:resolve_model(*, user_id)` decides which model a
+  generation call runs on, replacing the old "everyone gets Opus from the
+  prompt YAML" default. It takes the same keyword-only `user_id` as
+  `check_quota` and `_log_usage`, so the three policy steps (which model, may it
+  spend, record the spend) share one shape and one choke point. The load-bearing
+  invariant: a single `model` variable flows from resolution into both the API
+  call and `_log_usage`, so what's billed is always what ran — the model string
+  can't diverge between the call and the meter.
+- **Free → `claude-haiku-4-5`, demo → `claude-opus-4-8`** — env-tunable via new
+  `FREE_TIER_MODEL` / `DEMO_MODEL` config knobs, kept provider-shaped as plain
+  strings (pricing stays data-driven in `_PRICING`) so per-user model config
+  (F4, BYO keys) slots in without a redesign. In demo mode every visitor is the
+  seeded demo user, so the mode picks the model; the demo showcase stays on
+  Opus, bounded by `DEMO_DAILY_USD` + the global cap.
+- **Task-fixed models bypass resolution** — OCR (Sonnet, needs vision),
+  date-parse and condense (Haiku, trivial internal work) pass their model
+  string explicitly, so they're honored as-is regardless of tier: a paying
+  user's date-parse must not jump to Opus. Only user-facing generation
+  (synthesis, chat, mood scoring) resolves per-user. The prompt-YAML `model:`
+  field is now dead config and was removed from the three templates.
+- **No owner, no generation (user chose, 2026-07-21)** — `resolve_model` raises
+  for `user_id=None`. Mood scoring guards unowned rows (a connector sync before
+  its account has logged in) with an explicit INFO skip rather than spending the
+  app key on a model nobody owns; those rows get scored on the owner's budget
+  once claimed (`scripts/backfill_mood_reasoning.py`). This makes the principle
+  "mood scoring always bills to an owner's key" an enforced invariant, and fixes
+  a posture inversion where anonymous rows were scored for free while a
+  logged-in free-tier user was refused. System work that *does* run
+  (explicit-model calls with `user_id=None`) still meters visibly, charged to no
+  quota — it just has to name its model, since there's no owner to resolve one
+  from.
+- **Metering gap noticed, left for later** — `_ocr_with_claude` uses its own raw
+  Anthropic client, so it bypasses `resolve_model`, `check_quota`, *and*
+  `_log_usage` entirely. Pre-existing, unrelated to F3; worth a ticket.

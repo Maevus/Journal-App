@@ -278,8 +278,14 @@ async def score_mood_background(entry_id: int, content: str, *, user_id: Optiona
     Failures are silently swallowed — scoring is best-effort.
 
     `user_id` is the entry's owner — scoring their entry spends money on their
-    behalf. None for unowned startup-sync rows (metered as system work).
+    behalf. None means an unowned row (a connector sync before its account has
+    logged in): there is no owner to bill, so scoring is skipped (F3) rather
+    than spending the app key. Those rows get scored on the owner's budget once
+    they're claimed (scripts/backfill_mood_reasoning.py).
     """
+    if user_id is None:
+        logger.info("Mood scoring skipped for entry %d (unowned — no owner to bill)", entry_id)
+        return
     try:
         from services.llm_client import structured_output
 

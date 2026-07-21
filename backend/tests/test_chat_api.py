@@ -41,6 +41,22 @@ def _sources_from_response(text):
     return None
 
 
+def test_chat_runs_resolved_model(client, me, monkeypatch):
+    """Chat runs the per-user resolved model (free tier → haiku), not the
+    prompt-YAML default — otherwise a free-tier user is billed at opus rates."""
+    monkeypatch.setattr(chat, "hybrid_search", lambda *a, **k: [])
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
+    calls = []
+    monkeypatch.setattr(chat, "stream_text", _fake_stream_factory(calls))
+
+    client.post(
+        "/stream/chat",
+        json={"messages": [{"role": "user", "content": "anything"}], "limit": 5},
+    )
+    assert calls[0]["model"] == "claude-haiku-4-5"
+
+
 def test_chat_streams_answer_sources_and_retrieves_for_question(client, me, monkeypatch):
     seen = {}
 

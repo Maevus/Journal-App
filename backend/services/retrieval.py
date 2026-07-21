@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 # which needs `embed_and_store` to persist metadata + a one-off re-embed.
 _WINDOWED_SEMANTIC_POOL = 100
 
-# A small, fast model is plenty for date extraction + follow-up condensation — no
-# need to spend the default (opus) on either. Bare alias to match the house style
-# (llm_client.DEFAULT_MODEL etc.).
+# A small, fast model is plenty for date extraction + follow-up condensation.
+# These are task-fixed models passed explicitly, so they bypass the per-user
+# resolution step (llm_client.resolve_model) — the same string regardless of tier.
 _DATE_PARSE_MODEL = "claude-haiku-4-5"
 _CONDENSE_MODEL = "claude-haiku-4-5"
 

@@ -46,6 +46,22 @@ def test_over_budget_streams_quota_frame_and_caches_nothing(client, add_entry, m
     assert "Hello there" not in r.text  # and the refused response carried no text
 
 
+def test_free_tier_synthesis_runs_resolved_model(client, add_entry, monkeypatch):
+    """Synthesis runs the per-user resolved model (free tier → haiku), not the
+    prompt-YAML default — otherwise a free-tier user is billed at opus rates."""
+    monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
+    add_entry("a reflective entry", timestamp=datetime(2026, 5, 10))
+    seen = {}
+
+    async def fake_stream(*args, **kwargs):
+        seen["model"] = kwargs.get("model")
+        yield "ok"
+
+    monkeypatch.setattr(synthesis, "stream_text", fake_stream)
+    client.get("/stream/synthesis", params={"days": 0, "limit": 5})
+    assert seen["model"] == "claude-haiku-4-5"
+
+
 def test_miss_streams_tokens_then_caches(client, add_entry, monkeypatch):
     monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
     add_entry("a reflective entry", timestamp=datetime(2026, 5, 10))

@@ -1,6 +1,6 @@
 version: "1"
 name: chat_v1
-model: claude-opus-4-8
+# model is resolved per-user at call time (services/llm_client.resolve_model, F3).
 max_tokens: 2048
 system: |
   You are answering questions about someone's personal journal. They have ADHD; be warm, grounded, and concrete.

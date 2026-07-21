@@ -15,7 +15,7 @@ from clock import utcnow_naive
 from models.journal import JournalEntry, get_session, user_entries
 from models.user import User
 from services.auth import get_current_user
-from services.llm_client import DEFAULT_MODEL, stream_text
+from services.llm_client import resolve_model, stream_text
 from services.quota import QuotaExceededError, sse_quota_frame
 
 logger = logging.getLogger(__name__)
@@ -101,7 +101,10 @@ async def synthesis(
         entries_text = "No journal entries found yet."
 
     user_prompt = cfg["user_template"].format(entries=entries_text)
-    model = cfg.get("model", DEFAULT_MODEL)
+    # F3: the model is per-user now, not the prompt-YAML value. Resolve it here
+    # so it's both what we run and part of the cache key — a user's cached
+    # synthesis is keyed to the model that produced it.
+    model = resolve_model(user_id=user.id)
     max_tokens = cfg.get("max_tokens", 1024)
     key = _cache_key(user.id, model, max_tokens, cfg["system"], user_prompt)
 
