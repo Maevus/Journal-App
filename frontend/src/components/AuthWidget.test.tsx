@@ -16,4 +16,14 @@ describe('AuthWidget', () => {
 
     expect(onSignOut).toHaveBeenCalledTimes(1)
   })
+
+  it('shows a Demo badge and no sign-out in demo mode', () => {
+    // Demo is a shared showcase account — sign-out would drop onto the login
+    // gate, whose Google login can only error or be ignored.
+    render(
+      <AuthWidget user={{ id: 1, email: 'demo@journal.local', demo: true }} onSignOut={vi.fn()} />,
+    )
+    expect(screen.getByText(/demo mode/i)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /sign out/i })).not.toBeInTheDocument()
+  })
 })
