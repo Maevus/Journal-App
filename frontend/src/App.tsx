@@ -1,14 +1,13 @@
 import { useState } from 'react'
 import './App.css'
 import { exportUrl } from './api/client'
-import { ApiKeyPanel } from './components/ApiKeyPanel'
+import { AccountPanel } from './components/AccountPanel'
 import { AuthWidget } from './components/AuthWidget'
 import { ChatPanel } from './components/ChatPanel'
 import { LoginGate } from './components/LoginGate'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
 import { StreamingPanel } from './components/StreamingPanel'
-import { UsagePanel } from './components/UsagePanel'
 import { SOURCE_FILTERS, SourceSelector } from './components/SourceSelector'
 import { TIME_RANGES, TimeRangeSelector } from './components/TimeRangeSelector'
 import { useAuth } from './hooks/useAuth'
@@ -105,27 +104,10 @@ function App() {
           </div>
         </section>
 
-        {/* Account row: what you've spent (F5) beside the key that decides
-            your tier (F4) — saving/removing a key refetches the usage card
-            via KEY_CHANGED_EVENT. */}
-        <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-5">
-          <section className="relative lg:col-span-3">
-            <span className="sticker absolute -top-3 left-6 z-10 -rotate-1 bg-gold px-3 py-1 text-xs">
-              Usage
-            </span>
-            <div className="card-brutal h-full p-6 pt-8">
-              <UsagePanel demo={user.demo} />
-            </div>
-          </section>
-          <section className="relative lg:col-span-2">
-            <span className="sticker absolute -top-3 left-6 z-10 rotate-1 bg-ink px-3 py-1 text-xs text-white">
-              API key
-            </span>
-            <div className="card-brutal h-full p-6 pt-8">
-              <ApiKeyPanel demo={user.demo} />
-            </div>
-          </section>
-        </div>
+        {/* Account: spend (F5) and the key that sets your tier (F4), tabbed
+            into one card. Saving/removing a key refetches usage via
+            KEY_CHANGED_EVENT. */}
+        <AccountPanel demo={user.demo} />
       </main>
     </div>
   )
