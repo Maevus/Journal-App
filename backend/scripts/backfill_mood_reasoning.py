@@ -10,9 +10,14 @@ Usage (from backend/):
     .venv/bin/python scripts/backfill_mood_reasoning.py          # real journal.db
     APP_MODE=demo .venv/bin/python scripts/backfill_mood_reasoning.py
 
-Costs one LLM call per entry missing a reasoning. Safe to re-run — it only
-touches rows where mood_reasoning IS NULL. (The demo DB is seeded with canned
-reasoning, so it normally has nothing to backfill.)
+Costs one LLM call per entry missing a reasoning, billed to each entry's owner
+(F3). Safe to re-run — it only touches rows where mood_reasoning IS NULL. (The
+demo DB is seeded with canned reasoning, so it normally has nothing to backfill.)
+
+Ordering note: scoring an owner's entry spends on *their* budget. A free-tier
+owner ($0 quota, no BYO key) has every scoring refused by the quota gate before
+any API traffic, so those rows stay missing until the owner adds a key. Run this
+after the owner's key is in place.
 """
 import asyncio
 import os
@@ -46,16 +51,18 @@ async def main() -> None:
     ensure_schema()  # make sure the mood_reasoning column exists first
 
     with Session(engine) as session:
-        todo = [(e.id, e.content) for e in _missing(session)]
+        todo = [(e.id, e.content, e.user_id) for e in _missing(session)]
 
     if not todo:
         print("Nothing to backfill — every entry already has a mood_reasoning.")
         return
 
     print(f"Backfilling {len(todo)} entries (one LLM call each)…")
-    for n, (entry_id, content) in enumerate(todo, 1):
-        await score_mood_background(entry_id, content)  # writes score + reasoning
-        print(f"  [{n}/{len(todo)}] entry {entry_id}")
+    for n, (entry_id, content, user_id) in enumerate(todo, 1):
+        # Scoring bills the entry's owner (F3). user_id=None rows are skipped by
+        # score_mood_background (no owner to bill) and stay in the missing count.
+        await score_mood_background(entry_id, content, user_id=user_id)
+        print(f"  [{n}/{len(todo)}] entry {entry_id} (owner={user_id})")
 
     with Session(engine) as session:
         remaining = len(_missing(session))
