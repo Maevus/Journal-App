@@ -181,3 +181,16 @@ def test_fails_closed_when_the_check_itself_breaks(budget, monkeypatch):
     monkeypatch.setattr(quota, "engine", create_engine("sqlite:////nonexistent/nowhere.db"))
     with pytest.raises(QuotaExceededError):
         check_quota(user_id=1)
+
+
+def test_check_quota_trusts_the_callers_key_answer(monkeypatch, meter_db):
+    """The llm_client entry points read the key row once (resolve_api_key) and
+    pass its presence in — the gate must not re-read it (post-F5 cleanup)."""
+    import services.quota as quota
+
+    def boom(*a, **k):
+        raise AssertionError("check_quota re-read the key row")
+
+    monkeypatch.setattr(quota.key_store, "has_user_key", boom)
+    quota.check_quota(user_id=1, on_own_key=True)   # exempt — zero further reads
+    quota.check_quota(user_id=1, on_own_key=False)  # spend sums only, no key read

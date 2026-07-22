@@ -57,7 +57,7 @@ def _user_spend_since(session: Session, *, user_id: int, since: datetime) -> flo
     ).one()
 
 
-def check_quota(*, user_id: Optional[int]) -> None:
+def check_quota(*, user_id: Optional[int], on_own_key: Optional[bool] = None) -> None:
     """Refuse (raise QuotaExceededError) when the user's LLM spend since UTC
     midnight has reached their daily budget. `>=`, not `>`: a $0 budget must
     refuse at $0 spent — that's the keyless launch posture.
@@ -66,6 +66,11 @@ def check_quota(*, user_id: Optional[int]) -> None:
     state whose budget it's spending against. Explicit None = system work
     (the user-less startup-sync scoring): charged to nobody's budget, so the
     per-user check doesn't apply — only the global cap can stop it.
+
+    `on_own_key` is the post-F5 lookup consolidation: the llm_client entry
+    points already read the user's key row (resolve_api_key), so they pass its
+    presence here instead of this gate re-reading the same row. None (the
+    default, for callers that haven't looked) keeps the self-serve lookup.
     """
     day_start = _utc_day_start()
     try:
@@ -73,8 +78,11 @@ def check_quota(*, user_id: Optional[int]) -> None:
             # F4: a user on their own key spends their own money on their own
             # key — neither cap applies (both protect OUR key). Exempt them
             # before touching either cap.
-            if user_id is not None and key_store.has_user_key(session, user_id=user_id):
-                return
+            if user_id is not None:
+                if on_own_key is None:
+                    on_own_key = key_store.has_user_key(session, user_id=user_id)
+                if on_own_key:
+                    return
             # Global cap — the kill-switch bounding the worst day our key can
             # have, so it applies to every call, system work included. It sums
             # only spend on OUR key: BYO users' own-key spend is metered for

@@ -355,3 +355,44 @@ async def test_structured_output_raises_after_exhausting_retries(monkeypatch):
     with pytest.raises(anthropic.APIConnectionError):
         await llm.structured_output("prompt", _Schema, user_id=1)
     assert msgs.create_calls == 3
+
+
+# --- pre-call lookup consolidation (post-F5 cleanup) ------------------------
+
+async def test_generation_reads_the_key_row_exactly_once(monkeypatch, meter_db):
+    """resolve_api_key is the single "does this user have a key" read per call;
+    resolve_model and check_quota reuse its answer instead of re-reading the
+    row (the consolidation flagged in the F4 handoff)."""
+    reads = {"n": 0}
+
+    def counting_get(session, *, user_id, provider="anthropic"):
+        reads["n"] += 1
+        return None
+
+    def forbidden_has(*a, **k):
+        raise AssertionError("has_user_key re-read the key row — consolidation regressed")
+
+    monkeypatch.setattr(key_store, "get_user_key", counting_get)
+    monkeypatch.setattr(key_store, "has_user_key", forbidden_has)
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["hi"]))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+
+    [tok async for tok in llm.stream_text("prompt", user_id=1)]  # model resolves per-user
+
+    assert reads["n"] == 1
+    assert msgs.last_model == config.FREE_TIER_MODEL  # no key → free tier
+
+
+async def test_key_read_failure_refuses_the_call_before_any_api_traffic(monkeypatch):
+    """Pre-call reads fail closed (F2 stance): a key row we can't read is a
+    call we don't make, surfaced as the refusal type callers already handle."""
+    def boom(**k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(llm, "resolve_api_key", boom)
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["never"]))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+
+    with pytest.raises(QuotaExceededError):
+        [tok async for tok in llm.stream_text("prompt", model="claude-haiku-4-5", user_id=1)]
+    assert msgs.stream_calls == 0
