@@ -19,7 +19,7 @@ import models.journal  # noqa: F401, E402
 import models.keys  # noqa: F401, E402
 import models.user  # noqa: F401, E402
 from models.journal import engine
-from routers import auth, chat, entries, export, ingest, keys, search, synthesis, trends
+from routers import auth, chat, entries, export, ingest, keys, search, synthesis, trends, usage
 
 logger = logging.getLogger(__name__)
 
@@ -146,3 +146,4 @@ app.include_router(trends.router, prefix="/trends", tags=["trends"])
 app.include_router(entries.router, prefix="/entries", tags=["entries"])
 app.include_router(export.router, prefix="/export", tags=["export"])
 app.include_router(keys.router, prefix="/keys", tags=["keys"])
+app.include_router(usage.router, prefix="/usage", tags=["usage"])
