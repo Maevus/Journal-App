@@ -17,6 +17,7 @@ The SessionMiddleware cookie is scaffolding for the in-flight handshake only.
 Logged-in identity lives in the `sessions` table behind the httpOnly cookie
 (services/auth.py) — never in a client-side session.
 """
+import logging
 from typing import Optional
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
@@ -35,6 +36,8 @@ from services.auth import (
     get_or_create_user,
     revoke_session,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -64,9 +67,19 @@ async def callback(request: Request, db: Session = Depends(get_session)):
     """Google's return leg: code → verified identity → our session cookie."""
     try:
         token = await oauth.google.authorize_access_token(request)
-    except OAuthError:
+    except OAuthError as exc:
         # Denied consent, stale/mismatched state, … — send the user back to
         # the app with a flag it can surface, rather than a bare error page.
+        # Log why: a swallowed OAuth failure is otherwise invisible. error +
+        # description name the failure mode (mismatching_state / access_denied /
+        # invalid_grant …); the cookie flag distinguishes "state lost" from
+        # "state present but rejected".
+        logger.warning(
+            "OAuth callback failed: error=%r description=%r has_oauth_state_cookie=%s",
+            getattr(exc, "error", None),
+            getattr(exc, "description", None),
+            "oauth_state" in request.cookies,
+        )
         return RedirectResponse(
             f"{config.FRONTEND_URL}?auth_error=1", status_code=status.HTTP_302_FOUND
         )

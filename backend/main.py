@@ -24,6 +24,31 @@ from routers import auth, chat, entries, export, ingest, keys, search, synthesis
 logger = logging.getLogger(__name__)
 
 
+def _configure_logging() -> None:
+    """Make app-module logs visible.
+
+    Uvicorn configures only its own `uvicorn.*` loggers and leaves the root
+    logger handlerless, so records from `services.*` / `routers.*` fall through
+    to the WARNING-level lastResort handler — every `logger.info` is silently
+    dropped (mood-scoring skips, quota refusals, OAuth-callback failures, the
+    launch banner). Attach one INFO StreamHandler to the root so they reach
+    stdout (and, under scripts/dev.sh, the log file). Uvicorn's own loggers keep
+    `propagate=False`, so its access/error lines don't double up here.
+
+    Lives in the lifespan, not at import: the TestClient skips lifespan (see
+    conftest), so tests keep pytest's own log capture untouched. Idempotent so a
+    second startup in one process doesn't stack handlers.
+    """
+    root = logging.getLogger()
+    if getattr(root, "_journal_configured", False):
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+    root._journal_configured = True  # type: ignore[attr-defined]
+
+
 def _sync_on_startup_enabled() -> bool:
     """Sync Keep when the app opens, unless disabled. Off is useful under
     `uvicorn --reload` (restarts re-sync on every save) and is the default in
@@ -86,13 +111,14 @@ def _start_goodnotes_scheduler(scan=_scheduled_goodnotes_scan):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Plain print (not logger.info, which the default uvicorn config swallows):
-    # this is a launch banner so the operator can see at a glance which DB is live.
-    # flush=True so it appears immediately even when stdout is redirected to a file.
-    print(
-        f"APP_MODE={config.APP_MODE} → db={config.DATABASE_URL} "
-        f"chroma={config.CHROMA_PERSIST_DIR} sync={config.SYNC_ON_STARTUP}",
-        flush=True,
+    _configure_logging()  # before the first app log line below
+    # Launch banner so the operator sees at a glance which DB is live.
+    logger.info(
+        "APP_MODE=%s → db=%s chroma=%s sync=%s",
+        config.APP_MODE,
+        config.DATABASE_URL,
+        config.CHROMA_PERSIST_DIR,
+        config.SYNC_ON_STARTUP,
     )
     SQLModel.metadata.create_all(engine)
     models.journal.ensure_schema()  # add columns missing from a pre-existing DB
