@@ -232,12 +232,26 @@ class MoodSummary:
     by_year: list[dict]  # [{"year", "avg", "count"}], oldest → newest
 
 
-def mood_summary(session: Session, *, user_id: int) -> Optional[MoodSummary]:
-    """`user_id`'s mood aggregates over every scored entry, or None if nothing
-    is scored yet (the caller then omits the block entirely)."""
-    rows = session.exec(
-        user_entries(user_id).where(JournalEntry.mood_score.isnot(None))  # type: ignore[union-attr]
-    ).all()
+def mood_summary(
+    session: Session,
+    *,
+    user_id: int,
+    start: Optional[datetime] = None,
+    end: Optional[datetime] = None,
+) -> Optional[MoodSummary]:
+    """`user_id`'s mood aggregates over their scored entries, or None if none
+    are scored in scope (the caller then omits the block entirely).
+
+    `start`/`end` (naive UTC, half-open `[start, end)`) scope the aggregate to a
+    time window — the same window chat parses for retrieval — so a time-scoped
+    mood question ("average in 2024?") summarises that period, not all time.
+    Omit both for the whole journal."""
+    stmt = user_entries(user_id).where(JournalEntry.mood_score.isnot(None))  # type: ignore[union-attr]
+    if start is not None:
+        stmt = stmt.where(JournalEntry.timestamp >= start)
+    if end is not None:
+        stmt = stmt.where(JournalEntry.timestamp < end)
+    rows = session.exec(stmt).all()
     if not rows:
         return None
 

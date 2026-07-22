@@ -55,6 +55,28 @@ def test_mood_summary_is_user_scoped(session):
     assert s.count == 1 and s.overall_avg == 0.8  # only user 1's entry
 
 
+def test_mood_summary_scopes_to_a_date_window(session):
+    _add(session, "before", timestamp=datetime(2024, 12, 31), mood_score=0.2)
+    _add(session, "inside a", timestamp=datetime(2025, 3, 1), mood_score=0.4)
+    _add(session, "inside b", timestamp=datetime(2025, 9, 1), mood_score=0.8)
+    _add(session, "after", timestamp=datetime(2026, 1, 1), mood_score=0.9)  # end is exclusive
+
+    s = retrieval.mood_summary(
+        session, user_id=1, start=datetime(2025, 1, 1), end=datetime(2026, 1, 1)
+    )
+    assert s.count == 2  # only the two 2025 entries
+    assert s.overall_avg == 0.6  # (0.4 + 0.8) / 2 — the out-of-window rows excluded
+    assert s.first_date == "2025-03-01" and s.last_date == "2025-09-01"
+
+
+def test_mood_summary_none_when_window_has_no_scored_entries(session):
+    _add(session, "scored but out of window", timestamp=datetime(2020, 1, 1), mood_score=0.5)
+    s = retrieval.mood_summary(
+        session, user_id=1, start=datetime(2025, 1, 1), end=datetime(2026, 1, 1)
+    )
+    assert s is None
+
+
 def test_render_mood_summary_is_a_compact_block():
     s = retrieval.MoodSummary(
         count=3, overall_avg=0.633, first_date="2025-03-01", last_date="2026-01-01",

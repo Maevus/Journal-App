@@ -122,10 +122,12 @@ async def chat(
     else:
         entries_text = "No journal entries found."
 
-    # Whole-journal mood aggregate so the agent can answer average/trend
-    # questions the ~limit retrieved entries can't cover. Omitted (empty block)
-    # when nothing is scored yet.
-    summary = mood_summary(session, user_id=user.id)
+    # Mood aggregate so the agent can answer average/trend questions the ~limit
+    # retrieved entries can't cover — scoped to the same window retrieval used,
+    # so a time-scoped question ("mood in 2024?") summarises that period and an
+    # unscoped one summarises the whole journal. Omitted when nothing's scored
+    # in scope.
+    summary = mood_summary(session, user_id=user.id, start=start, end=end)
     summary_block = f"{render_mood_summary(summary)}\n\n" if summary else ""
 
     # Sources side-channel: the full numbered set, sent after the text so the
