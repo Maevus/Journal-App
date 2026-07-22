@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   AUTH_EXPIRED_EVENT,
+  KEY_CHANGED_EVENT,
   chatStreamUrl,
   deleteApiKey,
   exportUrl,
@@ -9,6 +10,7 @@ import {
   fetchKeyStatus,
   fetchMe,
   fetchTrends,
+  fetchUsage,
   ingestEntries,
   loginUrl,
   logout,
@@ -234,5 +236,51 @@ describe('auth', () => {
     expect(url).toBe(`${BASE}/auth/logout`)
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('include')
+  })
+})
+
+describe('fetchUsage', () => {
+  it('fetches the usage summary for the window with the cookie', async () => {
+    const summary = {
+      on_own_key: true,
+      model: 'claude-opus-4-8',
+      spent_today_usd: 0.18,
+      calls_today: 21,
+      budget_usd: null,
+      remaining_usd: null,
+      daily: [],
+    }
+    const fn = mockFetch(summary)
+    await expect(fetchUsage(7)).resolves.toEqual(summary)
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe(`${BASE}/usage?days=7`)
+    expect((init as RequestInit).credentials).toBe('include')
+  })
+
+  it('throws on a failed response', async () => {
+    mockFetch({}, false, 'Server Error')
+    await expect(fetchUsage()).rejects.toThrow(/Usage failed/)
+  })
+})
+
+describe('KEY_CHANGED_EVENT', () => {
+  it('is announced after a successful key save and delete', async () => {
+    const heard = vi.fn()
+    window.addEventListener(KEY_CHANGED_EVENT, heard)
+    mockFetch({ status: 'saved' })
+    await saveApiKey('sk-ant-x')
+    mockFetch({ status: 'removed' })
+    await deleteApiKey()
+    expect(heard).toHaveBeenCalledTimes(2)
+    window.removeEventListener(KEY_CHANGED_EVENT, heard)
+  })
+
+  it('is NOT announced when the save fails', async () => {
+    const heard = vi.fn()
+    window.addEventListener(KEY_CHANGED_EVENT, heard)
+    mockFetch({ detail: 'Anthropic rejected that API key' }, false, 'Bad Request')
+    await expect(saveApiKey('sk-ant-bad')).rejects.toThrow()
+    expect(heard).not.toHaveBeenCalled()
+    window.removeEventListener(KEY_CHANGED_EVENT, heard)
   })
 })

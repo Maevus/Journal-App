@@ -158,6 +158,12 @@ export async function logout(): Promise<void> {
   if (!res.ok) throw new Error(`Logout failed: ${res.statusText}`)
 }
 
+/** Fired after the user's BYO key is saved or removed: tier-dependent views
+ *  (the usage widget's model chip and cap) refetch on it. Same one-emitter,
+ *  one-listener pattern as AUTH_EXPIRED_EVENT, instead of plumbing key state
+ *  across sibling panels. */
+export const KEY_CHANGED_EVENT = 'journal:key-changed'
+
 /** Whether the logged-in user has stored their own Anthropic key (GET /keys).
  *  Returns only a boolean — the endpoint never returns key material. */
 export async function fetchKeyStatus(): Promise<{ has_key: boolean; provider: string }> {
@@ -187,6 +193,7 @@ export async function saveApiKey(apiKey: string): Promise<void> {
     }
     throw new Error(detail ?? `Saving the key failed: ${res.statusText}`)
   }
+  window.dispatchEvent(new Event(KEY_CHANGED_EVENT))
 }
 
 /** Remove the stored key, reverting the user to the free tier (DELETE /keys). */
@@ -194,6 +201,33 @@ export async function deleteApiKey(): Promise<void> {
   const res = await fetch(`${BASE_URL}/keys`, { method: 'DELETE', credentials: 'include' })
   reportIfAuthExpired(res)
   if (!res.ok) throw new Error(`Removing the key failed: ${res.statusText}`)
+  window.dispatchEvent(new Event(KEY_CHANGED_EVENT))
+}
+
+/** One UTC day of LLM spend in the usage window. */
+export interface UsageDay {
+  date: string
+  spent_usd: number
+  calls: number
+}
+
+/** The logged-in user's LLM spend (GET /usage). budget_usd/remaining_usd are
+ *  null when the user runs on their own key — uncapped, not "$0 left". */
+export interface UsageSummary {
+  on_own_key: boolean
+  model: string
+  spent_today_usd: number
+  calls_today: number
+  budget_usd: number | null
+  remaining_usd: number | null
+  daily: UsageDay[]
+}
+
+export async function fetchUsage(days = 30): Promise<UsageSummary> {
+  const res = await fetch(`${BASE_URL}/usage?days=${days}`, { credentials: 'include' })
+  reportIfAuthExpired(res)
+  if (!res.ok) throw new Error(`Usage failed: ${res.statusText}`)
+  return res.json() as Promise<UsageSummary>
 }
 
 export function exportUrl(format: 'csv' | 'json', source: string | null = null): string {

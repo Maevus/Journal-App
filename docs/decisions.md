@@ -341,3 +341,36 @@
   `APP_ENCRYPTION_KEY` is unset; the raw key is never echoed in any response.
 - **Left for later** — a BYO generation call now does three separate key lookups
   (`resolve_model`, `check_quota`, `resolve_api_key`); correct but consolidatable.
+
+## Freemium F5 — usage widget (2026-07-22)
+
+- **`GET /usage` reads through `services/quota.py`, not the route session** —
+  `usage_snapshot(*, user_id, days)` lives beside `check_quota`, sharing the
+  extracted `_tier_budget()` / `_user_spend_since()` helpers and the module
+  `engine` the gate itself reads. This makes widget–gate agreement structural:
+  the two can't disagree because they run the same code on the same store. The
+  deliberate cost is that `/usage` bypasses `get_session` dependency overrides —
+  exactly as `check_quota` always has (tests point `quota.engine` at the meter
+  DB via the `meter_db` fixture, and the F5 tests seed that DB, not the route's).
+- **Uncapped is `null`, not a number** — a BYO key-holder gets
+  `budget_usd: null` / `remaining_usd: null` on the wire: "no cap" is a
+  different kind of answer than "$X left" (F4: own-key spend is metered for
+  this widget but gates nobody). The frontend renders it as its own state.
+- **`model` comes from `resolve_model`, not re-derived** — the widget shows the
+  model the user's *next* generation actually runs on; duplicating the
+  tier→model mapping in the router could drift from what generation does. One
+  extra key lookup per request — same consolidatable-lookups loose end as F4.
+- **`KEY_CHANGED_EVENT`** (`frontend/src/api/client.ts`) — saving/removing a
+  BYO key dispatches a window event; `useUsage` refetches on it, so the tier
+  chip and cap can't go stale while `ApiKeyPanel` sits beside the widget. Same
+  one-emitter/one-listener pattern as `AUTH_EXPIRED_EVENT`, no shared state
+  plumbing. Refetches deliberately don't re-show the skeleton (numbers swap in
+  place) — which also keeps the new hook off the `setLoading`-in-effect lint
+  error the older `useTrends` carries.
+- **jsdom `ResizeObserver` stub added** (`src/test/setup.ts`) — recharts'
+  `ResponsiveContainer` needs one; the stub lets chart-bearing components
+  render in tests (asserting on text, not SVG). This also unblocks the
+  previously-untestable `MoodChart`.
+- **Postgres-migration note**: `usage_snapshot`'s daily grouping uses
+  `func.date(created_at)` — a SQLite-ism to re-check alongside `ensure_schema`
+  at the Postgres move (ADR 0003).
