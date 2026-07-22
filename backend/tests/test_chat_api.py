@@ -286,3 +286,58 @@ def test_over_budget_streams_quota_frame_without_sources(client, me, monkeypatch
     assert "event: quota" in r.text
     assert "data: [DONE]" in r.text
     assert "event: sources" not in r.text
+
+
+def test_chat_gives_agent_per_entry_mood_and_whole_journal_summary(
+    client, me, add_entry, monkeypatch
+):
+    """The Ask agent's prompt carries each retrieved entry's computed mood plus a
+    whole-journal mood summary — so it can answer both "how did I feel then" and
+    "what's my average / trend" (which RAG's few entries can't cover)."""
+    # Scored entries the summary aggregates over (real mood_summary runs against
+    # the request DB; add_entry owns them by `me`). The retrieved hit below is a
+    # separate stub, not in the DB, so it isn't double-counted in the summary.
+    add_entry("older", mood_score=0.4, timestamp=datetime(2025, 6, 1))
+    add_entry("newer", mood_score=0.6, timestamp=datetime(2026, 6, 1))
+
+    def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
+        return [(JournalEntry(id=9, source="text", content="a climbing day",
+                              content_hash="h", timestamp=datetime(2026, 5, 10),
+                              mood_score=0.7), 0.9)]
+
+    monkeypatch.setattr(chat, "hybrid_search", fake_hybrid)
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
+    calls = []
+    monkeypatch.setattr(chat, "stream_text", _fake_stream_factory(calls))
+
+    client.post(
+        "/stream/chat",
+        json={"messages": [{"role": "user", "content": "what's my average mood?"}], "limit": 5},
+    )
+
+    prompt = calls[0]["messages"][-1]["content"]
+    assert "mood: 0.70" in prompt  # per-entry score (option 1)
+    assert "Mood analytics" in prompt  # summary block present (option 2)
+    assert "average 0.50 across 2 scored entries" in prompt
+    assert "2025: 0.40 (n=1)" in prompt and "2026: 0.60 (n=1)" in prompt
+
+
+def test_chat_omits_mood_summary_when_nothing_scored(client, me, monkeypatch):
+    """No scored entries → no analytics block (mood_summary returns None), but
+    per-entry mood still renders as 'unscored'."""
+    monkeypatch.setattr(
+        chat, "hybrid_search",
+        lambda *a, **k: [(JournalEntry(id=1, source="text", content="c",
+                                       content_hash="h", timestamp=datetime(2026, 5, 1)), 0.5)],
+    )
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
+    calls = []
+    monkeypatch.setattr(chat, "stream_text", _fake_stream_factory(calls))
+
+    client.post("/stream/chat", json={"messages": [{"role": "user", "content": "hi"}]})
+
+    prompt = calls[0]["messages"][-1]["content"]
+    assert "Mood analytics" not in prompt
+    assert "mood: unscored" in prompt

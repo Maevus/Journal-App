@@ -8,18 +8,63 @@ import services.retrieval as retrieval
 from models.journal import JournalEntry
 
 
-def _add(session, content, source="text", timestamp=None, user_id=1):
+def _add(session, content, source="text", timestamp=None, user_id=1, mood_score=None):
     entry = JournalEntry(
         user_id=user_id,
         source=source,
         content=content,
         content_hash=content,
+        mood_score=mood_score,
         **({"timestamp": timestamp} if timestamp is not None else {}),
     )
     session.add(entry)
     session.commit()
     session.refresh(entry)
     return entry
+
+
+# --- mood_summary (whole-journal aggregate for the Ask agent) --------------
+
+def test_mood_summary_none_when_nothing_scored(session):
+    _add(session, "an unscored entry")  # mood_score defaults to None
+    assert retrieval.mood_summary(session, user_id=1) is None
+
+
+def test_mood_summary_aggregates_overall_and_by_year(session):
+    _add(session, "a", timestamp=datetime(2025, 3, 1), mood_score=0.4)
+    _add(session, "b", timestamp=datetime(2025, 9, 1), mood_score=0.6)
+    _add(session, "c", timestamp=datetime(2026, 1, 1), mood_score=0.9)
+    _add(session, "unscored", timestamp=datetime(2026, 2, 1))  # excluded
+
+    s = retrieval.mood_summary(session, user_id=1)
+    assert s is not None
+    assert s.count == 3  # the unscored entry is not counted
+    assert s.overall_avg == round((0.4 + 0.6 + 0.9) / 3, 3)
+    assert s.first_date == "2025-03-01"
+    assert s.last_date == "2026-01-01"
+    assert s.by_year == [
+        {"year": 2025, "avg": 0.5, "count": 2},
+        {"year": 2026, "avg": 0.9, "count": 1},
+    ]
+
+
+def test_mood_summary_is_user_scoped(session):
+    _add(session, "mine", user_id=1, mood_score=0.8)
+    _add(session, "theirs", user_id=2, mood_score=0.1)
+    s = retrieval.mood_summary(session, user_id=1)
+    assert s.count == 1 and s.overall_avg == 0.8  # only user 1's entry
+
+
+def test_render_mood_summary_is_a_compact_block():
+    s = retrieval.MoodSummary(
+        count=3, overall_avg=0.633, first_date="2025-03-01", last_date="2026-01-01",
+        by_year=[{"year": 2025, "avg": 0.5, "count": 2}, {"year": 2026, "avg": 0.9, "count": 1}],
+    )
+    block = retrieval.render_mood_summary(s)
+    assert "0.63" in block  # overall average, 2dp
+    assert "3 scored entries" in block
+    assert "2025-03-01 to 2026-01-01" in block
+    assert "2025: 0.50 (n=2)" in block and "2026: 0.90 (n=1)" in block
 
 
 def test_empty_db_returns_empty(session):

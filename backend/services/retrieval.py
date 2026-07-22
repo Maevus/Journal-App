@@ -6,6 +6,8 @@ Shared by `/search` and `/chat` so the fusion lives in one place. Returns
 entries paired with their combined score, highest first.
 """
 import logging
+from collections import defaultdict
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -211,3 +213,61 @@ async def condense_query(history: list[dict], question: str, *, user_id: Optiona
 
     rewritten = result.standalone_query.strip()
     return rewritten or question
+
+
+@dataclass
+class MoodSummary:
+    """Whole-journal mood aggregates for the Ask agent's context.
+
+    RAG retrieves only a handful of entries per turn, so the bot can't answer
+    "what's my average mood?" or "how has it trended over the years?" from the
+    entries alone. This summary gives it the aggregate the mood chart is built
+    from — scoped to one user, computed the same parameterized-ORM way /trends
+    aggregates (the question never touches SQL, so no injection surface)."""
+
+    count: int
+    overall_avg: float
+    first_date: str  # ISO date of the earliest scored entry
+    last_date: str  # ISO date of the latest scored entry
+    by_year: list[dict]  # [{"year", "avg", "count"}], oldest → newest
+
+
+def mood_summary(session: Session, *, user_id: int) -> Optional[MoodSummary]:
+    """`user_id`'s mood aggregates over every scored entry, or None if nothing
+    is scored yet (the caller then omits the block entirely)."""
+    rows = session.exec(
+        user_entries(user_id).where(JournalEntry.mood_score.isnot(None))  # type: ignore[union-attr]
+    ).all()
+    if not rows:
+        return None
+
+    scores = [r.mood_score for r in rows]
+    per_year: dict[int, list[float]] = defaultdict(list)
+    for r in rows:
+        per_year[r.timestamp.year].append(r.mood_score)
+    by_year = [
+        {"year": y, "avg": round(sum(v) / len(v), 3), "count": len(v)}
+        for y, v in sorted(per_year.items())
+    ]
+    dates = sorted(r.timestamp for r in rows)
+    return MoodSummary(
+        count=len(rows),
+        overall_avg=round(sum(scores) / len(scores), 3),
+        first_date=dates[0].date().isoformat(),
+        last_date=dates[-1].date().isoformat(),
+        by_year=by_year,
+    )
+
+
+def render_mood_summary(summary: MoodSummary) -> str:
+    """A compact prompt block from a MoodSummary — the mood-analytics context
+    the Ask agent uses for average/trend questions."""
+    years = "; ".join(f"{y['year']}: {y['avg']:.2f} (n={y['count']})" for y in summary.by_year)
+    return (
+        "Mood analytics — a computed 0.0-1.0 sentiment score per entry "
+        "(0 = very negative, 1 = very positive), separate from any rating the "
+        "person wrote in their own words:\n"
+        f"- Overall: average {summary.overall_avg:.2f} across {summary.count} "
+        f"scored entries, {summary.first_date} to {summary.last_date}.\n"
+        f"- By year: {years}."
+    )

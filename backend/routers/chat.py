@@ -14,7 +14,13 @@ from models.user import User
 from services.auth import get_current_user
 from services.llm_client import resolve_model, stream_text
 from services.quota import QuotaExceededError, sse_quota_frame
-from services.retrieval import condense_query, hybrid_search, parse_date_range
+from services.retrieval import (
+    condense_query,
+    hybrid_search,
+    mood_summary,
+    parse_date_range,
+    render_mood_summary,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +31,12 @@ _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "chat_v2.yaml"
 # How much of an entry to show in a citation chip — enough to recognise it,
 # not the whole entry.
 _SNIPPET_CHARS = 200
+
+
+def _mood_tag(score: float | None) -> str:
+    """The per-entry mood shown to the agent — the computed 0-1 sentiment, or
+    'unscored' for an entry the background scorer hasn't reached."""
+    return f"{score:.2f}" if score is not None else "unscored"
 
 _SSE_HEADERS = {
     "Cache-Control": "no-cache",
@@ -103,11 +115,18 @@ async def chat(
 
     if hits:
         entries_text = "\n---\n".join(
-            f"[{i}] [{entry.timestamp.date()} | source: {entry.source}]\n{entry.content}"
+            f"[{i}] [{entry.timestamp.date()} | source: {entry.source} | "
+            f"mood: {_mood_tag(entry.mood_score)}]\n{entry.content}"
             for i, (entry, _) in enumerate(hits, start=1)
         )
     else:
         entries_text = "No journal entries found."
+
+    # Whole-journal mood aggregate so the agent can answer average/trend
+    # questions the ~limit retrieved entries can't cover. Omitted (empty block)
+    # when nothing is scored yet.
+    summary = mood_summary(session, user_id=user.id)
+    summary_block = f"{render_mood_summary(summary)}\n\n" if summary else ""
 
     # Sources side-channel: the full numbered set, sent after the text so the
     # frontend can render a chip for each [n] the answer actually used.
@@ -122,7 +141,9 @@ async def chat(
         for i, (entry, _) in enumerate(hits, start=1)
     ]
 
-    user_prompt = cfg["user_template"].format(entries=entries_text, question=question)
+    user_prompt = cfg["user_template"].format(
+        mood_summary=summary_block, entries=entries_text, question=question
+    )
     # Prior turns as real user/assistant messages, then the current question as a
     # user turn carrying the retrieved entries.
     llm_messages = history + [{"role": "user", "content": user_prompt}]
