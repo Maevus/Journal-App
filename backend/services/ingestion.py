@@ -19,13 +19,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple, Union
 
-import anthropic
 from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from clock import utcnow_naive
 from models.journal import JournalEntry, engine
 from services.embeddings import embed_and_store
+from services.llm_client import stream_text
 from services.quota import QuotaExceededError
 
 logger = logging.getLogger(__name__)
@@ -334,10 +334,18 @@ _IMAGE_MEDIA_TYPES: Dict[str, str] = {
 }
 
 
-async def _ocr_with_claude(
-    client: "anthropic.AsyncAnthropic", file_bytes: bytes, media_type: str
-) -> str:
-    """Transcribe handwritten or printed content via Claude vision."""
+async def _ocr_with_claude(file_bytes: bytes, media_type: str, *, user_id: Optional[int]) -> str:
+    """Transcribe handwritten or printed content via Claude vision.
+
+    Goes through llm_client.stream_text — the same choke point as every other
+    LLM call — so OCR is quota-gated before it spends, metered after, and runs
+    on the owner's BYO key when they have one. (It previously used a raw
+    Anthropic client and was the one unmetered/ungated spend surface.) The
+    model stays task-fixed (`_OCR_MODEL` needs vision), which per F3 means it's
+    honored as-is and never per-user resolved. `user_id` is the entry owner
+    from _resolve_sync_owner: their pages, their budget; None (unowned sync) is
+    system work — metered, gated only by the global cap.
+    """
     encoded = base64.standard_b64encode(file_bytes).decode()
 
     if media_type == "application/pdf":
@@ -351,9 +359,8 @@ async def _ocr_with_claude(
             "source": {"type": "base64", "media_type": media_type, "data": encoded},
         }
 
-    response = await client.messages.create(
-        model=_OCR_MODEL,
-        max_tokens=2048,
+    parts: List[str] = []
+    async for chunk in stream_text(
         messages=[
             {
                 "role": "user",
@@ -371,11 +378,12 @@ async def _ocr_with_claude(
                 ],
             }
         ],
-    )
-    for block in response.content:
-        if hasattr(block, "text"):
-            return block.text
-    return ""
+        model=_OCR_MODEL,
+        max_tokens=2048,
+        user_id=user_id,
+    ):
+        parts.append(chunk)
+    return "".join(parts)
 
 
 def _split_pdf_pages(path: Path) -> List[bytes]:
@@ -620,9 +628,12 @@ async def ingest_goodnotes(
         logger.warning("GoodNotes path does not exist: %s", folder)
         return {"ingested": 0, "updated": 0, "skipped": 0}, []
 
-    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    # OCR spends money, so it's billed to the sync owner (their pages, their
+    # budget/key) and quota-gated per call. Resolved once, up front.
+    owner = _resolve_sync_owner(session)
     raw_entries: List[RawEntry] = []
     ocr_calls = 0
+    quota_hit = False
 
     for path in sorted(folder.rglob("*")):
         if not path.is_file() or path.name.startswith(".DS_Store"):
@@ -649,7 +660,15 @@ async def ingest_goodnotes(
                 external_id = f"{resolved.name}#p{page_num}"
                 if not force and _page_already_imported(session, external_id):
                     continue
-                text = await _ocr_with_claude(client, page_bytes, "application/pdf")
+                try:
+                    text = await _ocr_with_claude(page_bytes, "application/pdf", user_id=owner)
+                except QuotaExceededError as exc:
+                    # The gate refused BEFORE spending; every further page would
+                    # be refused too. Stop scanning but keep (and ingest) the
+                    # pages already transcribed — that money is spent.
+                    logger.info("GoodNotes OCR stopped by quota: %s", exc)
+                    quota_hit = True
+                    break
                 ocr_calls += 1
                 if _is_blank_transcript(text):
                     continue
@@ -672,19 +691,24 @@ async def ingest_goodnotes(
             external_id = resolved.name
             if not force and _page_already_imported(session, external_id):
                 continue
-            text = await _ocr_with_claude(
-                client, resolved.read_bytes(), _IMAGE_MEDIA_TYPES[suffix]
-            )
+            try:
+                text = await _ocr_with_claude(
+                    resolved.read_bytes(), _IMAGE_MEDIA_TYPES[suffix], user_id=owner
+                )
+            except QuotaExceededError as exc:
+                logger.info("GoodNotes OCR stopped by quota: %s", exc)
+                quota_hit = True
+                break
             ocr_calls += 1
             if not _is_blank_transcript(text):
                 raw_entries.append(
                     RawEntry(content=text, timestamp=file_mtime, external_id=external_id)
                 )
+        if quota_hit:
+            break
 
     logger.info(
         "GoodNotes: %d OCR call(s), %d page(s) with text in %s",
         ocr_calls, len(raw_entries), folder,
     )
-    return ingest_entries(
-        raw_entries, "goodnotes", session, user_id=_resolve_sync_owner(session)
-    )
+    return ingest_entries(raw_entries, "goodnotes", session, user_id=owner)

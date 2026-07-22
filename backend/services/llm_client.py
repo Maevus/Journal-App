@@ -15,7 +15,7 @@ import config
 from models.journal import engine
 from models.usage import LLMUsage
 from services import key_store
-from services.quota import check_quota
+from services.quota import QuotaExceededError, check_quota
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 _PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (5.0 / 1_000_000, 25.0 / 1_000_000),  # $5 in / $25 out per 1M
     "claude-haiku-4-5": (1.0 / 1_000_000, 5.0 / 1_000_000),  # $1 in / $5 out per 1M
+    "claude-sonnet-4-6": (3.0 / 1_000_000, 15.0 / 1_000_000),  # $3 in / $15 out per 1M (OCR)
 }
 _DEFAULT_PRICING = _PRICING["claude-opus-4-8"]
 
@@ -37,7 +38,7 @@ _RETRYABLE = (
 )
 
 
-def resolve_model(*, user_id: Optional[int]) -> str:
+def resolve_model(*, user_id: Optional[int], on_own_key: Optional[bool] = None) -> str:
     """Which model a generation call for `user_id` runs on (ADR 0003, F3).
 
     The per-user resolution step that replaces the prompt-YAML model choice
@@ -49,6 +50,10 @@ def resolve_model(*, user_id: Optional[int]) -> str:
     resolution joins quota and metering as the third per-call step. None means
     unowned system work, which no longer generates — it raises here rather than
     silently spending the app key on a model nobody owns.
+
+    `on_own_key`: the post-F5 lookup consolidation — an entry point that has
+    already read the key row (resolve_api_key) passes its answer; None (routers,
+    which haven't looked) keeps the self-serve lookup.
     """
     if user_id is None:
         raise ValueError("no owner: unowned system work does not generate (F3)")
@@ -58,10 +63,10 @@ def resolve_model(*, user_id: Optional[int]) -> str:
         return config.DEMO_MODEL
     # F4: a user on their own key pays their own way, so they get the premium
     # model, not the free-tier default. This is the first-class account payoff.
-    with Session(engine) as session:
-        if key_store.has_user_key(session, user_id=user_id):
-            return config.BYO_KEY_MODEL
-    return config.FREE_TIER_MODEL
+    if on_own_key is None:
+        with Session(engine) as session:
+            on_own_key = key_store.has_user_key(session, user_id=user_id)
+    return config.BYO_KEY_MODEL if on_own_key else config.FREE_TIER_MODEL
 
 
 def resolve_api_key(*, user_id: Optional[int]) -> Optional[str]:
@@ -95,6 +100,33 @@ async def key_is_valid(raw_key: str) -> bool:
         return True
     except anthropic.AuthenticationError:
         return False
+
+
+def _pre_call(
+    model: Optional[str], *, user_id: Optional[int]
+) -> tuple[str, anthropic.AsyncAnthropic]:
+    """The pre-call policy steps both entry points share, on ONE key read.
+
+    resolve_api_key is the single "does this user have a key" read; resolve_model
+    (when the model isn't task-fixed) and check_quota reuse its answer instead of
+    each re-reading the row (the consolidation flagged at F4). Every read here
+    runs BEFORE any API traffic and fails closed — a key row we can't read is a
+    call we don't make, surfaced as the same refusal type callers already handle
+    (the F2 stance; this also turns an APP_ENCRYPTION_KEY misconfiguration into
+    a clean refusal instead of a mid-stream 500).
+    """
+    try:
+        api_key = resolve_api_key(user_id=user_id)  # F4: own key if set
+    except Exception as exc:
+        logger.exception("key resolution failed — refusing the call (fails closed)")
+        raise QuotaExceededError("key resolution unavailable") from exc
+    # F3: an unspecified model resolves per-user (free→haiku, demo→opus). An
+    # explicit model (task-fixed callers: OCR, date-parse, condense) is honored.
+    if model is None:
+        model = resolve_model(user_id=user_id, on_own_key=api_key is not None)
+    # The F2 money gate: raises QuotaExceededError before any API traffic.
+    check_quota(user_id=user_id, on_own_key=api_key is not None)
+    return model, _async_client(api_key)
 
 
 def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Optional[int]) -> None:
@@ -157,16 +189,11 @@ async def stream_text(
         if prompt is None:
             raise ValueError("stream_text requires either `prompt` or `messages`")
         messages = [{"role": "user", "content": prompt}]
-    # F3: an unspecified model resolves per-user (free→haiku, demo→opus). An
-    # explicit model (task-fixed callers: OCR, date-parse, condense) is honored.
-    # The one `model` variable then flows to both the API call and _log_usage,
-    # so what's billed is always what ran.
-    if model is None:
-        model = resolve_model(user_id=user_id)
-    # The F2 money gate: raises QuotaExceededError before any API traffic.
-    # Once per call, not per retry — a retry continues the call already allowed.
-    check_quota(user_id=user_id)
-    client = _async_client(resolve_api_key(user_id=user_id))  # F4: own key if set
+    # One key read serves model resolution, the quota gate, and the client (see
+    # _pre_call). Runs once per call, not per retry — a retry continues the call
+    # already allowed. The one `model` variable then flows to both the API call
+    # and _log_usage, so what's billed is always what ran.
+    model, client = _pre_call(model, user_id=user_id)
     last_err: Exception | None = None
 
     for attempt in range(max_retries):
@@ -214,10 +241,8 @@ async def structured_output(
 
     `user_id`: required keyword-only billing attribution — see stream_text.
     """
-    if model is None:  # F3: resolve per-user; see stream_text
-        model = resolve_model(user_id=user_id)
-    check_quota(user_id=user_id)  # the F2 money gate — see stream_text
-    client = _async_client(resolve_api_key(user_id=user_id))  # F4: own key if set
+    # One key read serves all three pre-call policy steps — see _pre_call.
+    model, client = _pre_call(model, user_id=user_id)
     tool_name = "structured_extract"
     tool_def = {
         "name": tool_name,

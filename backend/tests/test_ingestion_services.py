@@ -1,5 +1,5 @@
 """Tests for the ingestion service's async/external paths and date helpers
-(gkeepapi, the Anthropic vision client, and the filesystem are mocked)."""
+(gkeepapi, the LLM choke point, and the filesystem are mocked)."""
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -9,6 +9,7 @@ from sqlmodel import select
 import services.ingestion as ing
 from models.journal import JournalEntry
 from services.ingestion import RawEntry
+from services.quota import QuotaExceededError
 
 
 # --- _rescue_regressed_date -------------------------------------------------
@@ -104,16 +105,38 @@ async def test_ingest_keep_persists_notes(session, monkeypatch):
     assert len(scored) == 1
 
 
-# --- _ocr_with_claude (vision client mocked) -------------------------------
+# --- _ocr_with_claude (via the llm_client choke point, stream mocked) ------
 
-async def test_ocr_with_claude_returns_transcript():
-    class _Msgs:
-        async def create(self, **kwargs):
-            return SimpleNamespace(content=[SimpleNamespace(text="transcribed text")])
+async def test_ocr_routes_through_the_llm_choke_point(monkeypatch):
+    """OCR must go through stream_text — the choke point where quota, metering,
+    and BYO-key resolution live — with a task-fixed model and the owner billed."""
+    seen = {}
 
-    client = SimpleNamespace(messages=_Msgs())
-    out = await ing._ocr_with_claude(client, b"bytes", "application/pdf")
+    async def fake_stream_text(*, messages, model, max_tokens, user_id):
+        seen.update(model=model, user_id=user_id, messages=messages)
+        yield "transcribed "
+        yield "text"
+
+    monkeypatch.setattr(ing, "stream_text", fake_stream_text)
+
+    out = await ing._ocr_with_claude(b"bytes", "application/pdf", user_id=7)
     assert out == "transcribed text"
+    assert seen["model"] == ing._OCR_MODEL  # task-fixed (vision), never resolved
+    assert seen["user_id"] == 7  # billed to the entry owner
+    # The page rides as a document block ahead of the transcription prompt.
+    assert seen["messages"][0]["content"][0]["type"] == "document"
+
+
+async def test_ocr_sends_images_as_image_blocks(monkeypatch):
+    seen = {}
+
+    async def fake_stream_text(*, messages, model, max_tokens, user_id):
+        seen["block_type"] = messages[0]["content"][0]["type"]
+        yield "a note"
+
+    monkeypatch.setattr(ing, "stream_text", fake_stream_text)
+    await ing._ocr_with_claude(b"\x89PNG", "image/png", user_id=None)
+    assert seen["block_type"] == "image"
 
 
 # --- _ensure_local (non-iCloud passthrough) --------------------------------
@@ -136,10 +159,8 @@ def _write_pdf(path):
 async def test_ingest_goodnotes_ingests_page(session, monkeypatch, tmp_path):
     _write_pdf(tmp_path / "Journal.pdf")
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
 
-    async def fake_ocr(client, page_bytes, media_type):
+    async def fake_ocr(file_bytes, media_type, *, user_id):
         return "10 Jan 2026\nGreat productive day"
 
     monkeypatch.setattr(ing, "_ocr_with_claude", fake_ocr)
@@ -155,10 +176,8 @@ async def test_ingest_goodnotes_ingests_page(session, monkeypatch, tmp_path):
 async def test_ingest_goodnotes_skips_blank_pages(session, monkeypatch, tmp_path):
     _write_pdf(tmp_path / "Journal.pdf")
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
 
-    async def blank_ocr(client, page_bytes, media_type):
+    async def blank_ocr(file_bytes, media_type, *, user_id):
         return "[BLANK]"
 
     monkeypatch.setattr(ing, "_ocr_with_claude", blank_ocr)
@@ -169,10 +188,8 @@ async def test_ingest_goodnotes_skips_blank_pages(session, monkeypatch, tmp_path
 async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path):
     (tmp_path / "photo.png").write_bytes(b"\x89PNG fake-bytes")
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
 
-    async def fake_ocr(client, file_bytes, media_type):
+    async def fake_ocr(file_bytes, media_type, *, user_id):
         return "A handwritten note"
 
     monkeypatch.setattr(ing, "_ocr_with_claude", fake_ocr)
@@ -180,6 +197,28 @@ async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path):
     assert stats["ingested"] == 1
     row = session.exec(select(JournalEntry)).all()[0]
     assert row.external_id == "photo.png"
+
+
+async def test_ingest_goodnotes_quota_stops_scan_but_keeps_paid_pages(
+    session, monkeypatch, tmp_path
+):
+    """A quota refusal mid-scan stops further OCR (every later call would be
+    refused too) but still ingests the pages already transcribed — that money
+    is spent, so the transcripts must not be thrown away."""
+    _write_pdf_pages(tmp_path / "Journal.pdf", 3)
+    monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
+    calls = {"n": 0}
+
+    async def quota_after_one(file_bytes, media_type, *, user_id):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            raise QuotaExceededError("budget exhausted")
+        return "10 Jan 2026\nFirst page"
+
+    monkeypatch.setattr(ing, "_ocr_with_claude", quota_after_one)
+    stats, _ = await ing.ingest_goodnotes(session)
+    assert stats["ingested"] == 1  # the transcribed page survived
+    assert calls["n"] == 2  # page 2 was refused; page 3 never attempted
 
 
 async def test_ingest_goodnotes_missing_folder(session, monkeypatch):
@@ -207,7 +246,7 @@ class _OCRSpy:
     def __init__(self):
         self.calls = 0
 
-    async def __call__(self, client, page_bytes, media_type):
+    async def __call__(self, file_bytes, media_type, *, user_id):
         self.calls += 1
         day = 9 + self.calls  # 10 Jan, 11 Jan, ...
         return f"{day} Jan 2026\nEntry number {self.calls}"
@@ -215,8 +254,6 @@ class _OCRSpy:
 
 def _setup_goodnotes(monkeypatch, tmp_path, spy):
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
-    monkeypatch.setattr(ing.anthropic, "AsyncAnthropic", lambda **k: object())
     monkeypatch.setattr(ing, "_ocr_with_claude", spy)
 
 
