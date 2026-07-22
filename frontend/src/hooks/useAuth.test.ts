@@ -12,12 +12,12 @@ vi.mock('../api/client', () => ({
 
 describe('useAuth', () => {
   it('resolves to the logged-in user', async () => {
-    vi.mocked(fetchMe).mockResolvedValue({ id: 1, email: 'a@example.com' })
+    vi.mocked(fetchMe).mockResolvedValue({ id: 1, email: 'a@example.com', demo: false })
     const { result } = renderHook(() => useAuth())
 
     expect(result.current.loading).toBe(true)
     await waitFor(() => expect(result.current.loading).toBe(false))
-    expect(result.current.user).toEqual({ id: 1, email: 'a@example.com' })
+    expect(result.current.user).toEqual({ id: 1, email: 'a@example.com', demo: false })
   })
 
   it('resolves to logged-out on null', async () => {
@@ -37,7 +37,7 @@ describe('useAuth', () => {
   })
 
   it('flips to logged-out when a data route reports session expiry', async () => {
-    vi.mocked(fetchMe).mockResolvedValue({ id: 1, email: 'a@example.com' })
+    vi.mocked(fetchMe).mockResolvedValue({ id: 1, email: 'a@example.com', demo: false })
     const { result } = renderHook(() => useAuth())
     await waitFor(() => expect(result.current.user).not.toBeNull())
 
@@ -49,7 +49,7 @@ describe('useAuth', () => {
   })
 
   it('signOut revokes the session and clears the user', async () => {
-    vi.mocked(fetchMe).mockResolvedValue({ id: 1, email: 'a@example.com' })
+    vi.mocked(fetchMe).mockResolvedValue({ id: 1, email: 'a@example.com', demo: false })
     vi.mocked(logout).mockResolvedValue(undefined)
     const { result } = renderHook(() => useAuth())
     await waitFor(() => expect(result.current.user).not.toBeNull())

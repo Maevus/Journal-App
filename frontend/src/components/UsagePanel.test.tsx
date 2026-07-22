@@ -66,6 +66,18 @@ describe('UsagePanel', () => {
     expect(await screen.findByText(/your key · opus/i)).toBeInTheDocument()
   })
 
+  it('labels the tier chip "Demo" in demo mode (its budget is not a free tier)', async () => {
+    vi.mocked(client.fetchUsage).mockResolvedValue({
+      ...freeTier,
+      model: 'claude-opus-4-8', // demo runs the premium model on its own budget
+      budget_usd: 1,
+      remaining_usd: 1,
+    })
+    render(<UsagePanel demo />)
+    expect(await screen.findByText(/demo · opus/i)).toBeInTheDocument()
+    expect(screen.queryByText(/free tier/i)).not.toBeInTheDocument()
+  })
+
   it('surfaces a load failure', async () => {
     vi.mocked(client.fetchUsage).mockRejectedValue(new Error('Usage failed: boom'))
     render(<UsagePanel />)

@@ -15,6 +15,15 @@ vi.mock('../api/client', async (importOriginal) => {
 })
 
 describe('ApiKeyPanel', () => {
+  it('replaces the whole control with a note in demo mode', () => {
+    vi.mocked(client.fetchKeyStatus).mockClear()
+    render(<ApiKeyPanel demo />)
+    expect(screen.getByText(/shared account/i)).toBeInTheDocument()
+    expect(screen.queryByPlaceholderText(/sk-ant/)).not.toBeInTheDocument()
+    // No status probe either — the shared demo account can't hold a key.
+    expect(client.fetchKeyStatus).not.toHaveBeenCalled()
+  })
+
   it('shows the add-key form when the user has no key', async () => {
     vi.mocked(client.fetchKeyStatus).mockResolvedValue({ has_key: false, provider: 'anthropic' })
     render(<ApiKeyPanel />)

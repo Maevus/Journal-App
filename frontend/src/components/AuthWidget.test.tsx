@@ -9,7 +9,7 @@ import { AuthWidget } from './AuthWidget'
 describe('AuthWidget', () => {
   it('shows the email and reports sign-out clicks', async () => {
     const onSignOut = vi.fn()
-    render(<AuthWidget user={{ id: 1, email: 'a@example.com' }} onSignOut={onSignOut} />)
+    render(<AuthWidget user={{ id: 1, email: 'a@example.com', demo: false }} onSignOut={onSignOut} />)
 
     screen.getByText('a@example.com')
     await userEvent.click(screen.getByRole('button', { name: /sign out/i }))

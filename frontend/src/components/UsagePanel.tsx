@@ -26,8 +26,9 @@ const usd = (v: number) => `$${v.toFixed(v > 0 && v < 0.01 ? 4 : 2)}`
 
 /** Per-user LLM spend (F5): today's numbers, the tier cap (or "own key, no
  *  cap"), and a 30-day spend chart. Every number is the quota gate's own view
- *  (GET /usage reads the same meter the gate enforces). */
-export function UsagePanel() {
+ *  (GET /usage reads the same meter the gate enforces). `demo` relabels the
+ *  tier chip — the shared demo account has its own budget, not a "free tier". */
+export function UsagePanel({ demo = false }: { demo?: boolean }) {
   const { data, loading, error } = useUsage()
 
   if (loading) return <SkeletonLoader lines={4} />
@@ -44,7 +45,8 @@ export function UsagePanel() {
             data.on_own_key ? 'bg-mint' : 'bg-paper'
           }`}
         >
-          {data.on_own_key ? 'Your key' : 'Free tier'} · {modelFamily(data.model)}
+          {data.on_own_key ? 'Your key' : demo ? 'Demo' : 'Free tier'} ·{' '}
+          {modelFamily(data.model)}
         </span>
         <p className="text-sm font-medium text-ink/70">
           Today: <span className="font-bold text-ink">{usd(data.spent_today_usd)}</span> ·{' '}

@@ -87,8 +87,13 @@ async def callback(request: Request, db: Session = Depends(get_session)):
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
-    """Who am I? The SPA calls this on load to decide login state."""
-    return {"id": user.id, "email": user.email}
+    """Who am I? The SPA calls this on load to decide login state.
+
+    `demo` rides along so the frontend knows it's talking to the shared demo
+    account — the mode was previously invisible to the SPA, which showed the
+    BYO key form in demo only for POST /keys to 403 on save.
+    """
+    return {"id": user.id, "email": user.email, "demo": config.IS_DEMO}
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

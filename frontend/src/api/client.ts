@@ -128,10 +128,12 @@ export function chatStreamUrl(): string {
   return `${BASE_URL}/stream/chat`
 }
 
-/** The logged-in identity, from GET /auth/me. */
+/** The logged-in identity, from GET /auth/me. `demo` means the shared demo
+ *  account — key management is disabled and the tier chip reads "Demo". */
 export interface AuthUser {
   id: number
   email: string
+  demo: boolean
 }
 
 /** Where "Sign in with Google" points — a full-page navigation into the OAuth

@@ -374,3 +374,34 @@
 - **Postgres-migration note**: `usage_snapshot`'s daily grouping uses
   `func.date(created_at)` — a SQLite-ism to re-check alongside `ensure_schema`
   at the Postgres move (ADR 0003).
+
+## Post-F5 loose-end sweep (2026-07-22)
+
+The three gaps flagged in the F3/F4 handoffs, closed in one pass:
+
+- **OCR now goes through the choke point** — `_ocr_with_claude` calls
+  `llm_client.stream_text` (which already accepted full `messages`, so image/
+  document blocks needed no llm_client change) instead of its own raw Anthropic
+  client. That makes OCR quota-gated before it spends, metered after (Sonnet's
+  real $3/$15 added to `_PRICING` — it had been silently falling back to Opus
+  rates), and run on the owner's BYO key. Billing goes to `_resolve_sync_owner`
+  — their pages, their budget; unowned sync is system work (global cap only).
+  The model stays task-fixed (vision), per F3. A quota refusal mid-scan stops
+  further OCR but **keeps and ingests the already-transcribed pages** — that
+  money is spent; only future spend is refused.
+- **One key read per generation call** — `_pre_call` in `llm_client` makes
+  `resolve_api_key` the single "does this user have a key" read;
+  `resolve_model` and `check_quota` accept its answer via an optional
+  keyword-only `on_own_key` hint (None = self-serve lookup, so standalone
+  callers like the synthesis router are unchanged). Key resolution now fails
+  closed as `QuotaExceededError` — the F2 stance, and it turns an
+  `APP_ENCRYPTION_KEY` misconfiguration into a clean refusal frame instead of
+  a mid-stream 500. Threading the key from routers into the entry points was
+  rejected: it would widen the plaintext-key surface F4 deliberately kept to
+  key_store → client construction.
+- **The frontend knows about demo mode** — `GET /auth/me` gained a `demo`
+  boolean (`config.IS_DEMO`). `ApiKeyPanel` replaces the key form with a
+  shared-account note (it previously offered a form whose save could only
+  403), and `UsagePanel`'s tier chip reads "Demo" instead of the misleading
+  "Free tier". Carried on the existing auth probe rather than a new
+  `/config` endpoint — one fetch, and the flag is only meaningful logged in.

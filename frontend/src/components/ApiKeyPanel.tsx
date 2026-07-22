@@ -5,14 +5,17 @@ import { deleteApiKey, fetchKeyStatus, saveApiKey } from '../api/client'
  *  Anthropic key here (validated against Anthropic on save, then stored
  *  encrypted server-side) upgrades their analysis to Opus on their own key.
  *  The key is entered into a password field and never rendered back — the
- *  status endpoint returns only a boolean. */
-export function ApiKeyPanel() {
+ *  status endpoint returns only a boolean. In demo mode (`demo`) the whole
+ *  control is replaced by a note: every visitor shares the demo account, so
+ *  POST /keys would 403 anyway — better to say so than to offer a form. */
+export function ApiKeyPanel({ demo = false }: { demo?: boolean }) {
   const [hasKey, setHasKey] = useState<boolean | null>(null) // null = still loading
   const [apiKey, setApiKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    if (demo) return // no key status to probe — the demo account can't hold one
     let alive = true
     fetchKeyStatus()
       .then((s) => alive && setHasKey(s.has_key))
@@ -22,7 +25,7 @@ export function ApiKeyPanel() {
     return () => {
       alive = false
     }
-  }, [])
+  }, [demo])
 
   const save = async () => {
     const key = apiKey.trim()
@@ -51,6 +54,15 @@ export function ApiKeyPanel() {
     } finally {
       setBusy(false)
     }
+  }
+
+  if (demo) {
+    return (
+      <p className="text-sm font-medium text-ink/70">
+        The demo runs on a shared account, so key management is disabled here. In the real
+        app, adding your own Anthropic key runs analysis on Opus with no daily cap.
+      </p>
+    )
   }
 
   if (hasKey === null) {

@@ -81,6 +81,19 @@ def test_me_returns_user_when_logged_in(client, monkeypatch):
 
     assert resp.status_code == 200
     assert resp.json()["email"] == "me@example.com"
+    assert resp.json()["demo"] is False  # real mode — key management available
+
+
+def test_me_carries_the_demo_flag(client, monkeypatch):
+    """In demo mode /auth/me says so — the frontend hides key management
+    (shared account) instead of surfacing a 403 on save."""
+    import config
+
+    _fake_google_login(monkeypatch, email="me@example.com")
+    client.get("/auth/callback", follow_redirects=False)
+    monkeypatch.setattr(config, "IS_DEMO", True)
+
+    assert client.get("/auth/me").json()["demo"] is True
 
 
 def test_me_401_without_cookie(client):

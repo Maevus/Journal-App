@@ -114,7 +114,7 @@ function App() {
               Usage
             </span>
             <div className="card-brutal h-full p-6 pt-8">
-              <UsagePanel />
+              <UsagePanel demo={user.demo} />
             </div>
           </section>
           <section className="relative lg:col-span-2">
@@ -122,7 +122,7 @@ function App() {
               API key
             </span>
             <div className="card-brutal h-full p-6 pt-8">
-              <ApiKeyPanel />
+              <ApiKeyPanel demo={user.demo} />
             </div>
           </section>
         </div>
