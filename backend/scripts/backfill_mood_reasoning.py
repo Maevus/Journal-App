@@ -34,6 +34,14 @@ load_dotenv()
 
 from sqlmodel import Session, SQLModel, select  # noqa: E402
 
+# Register every table in the shared metadata, as main.py does — otherwise
+# JournalEntry.user_id's foreign key to `users` can't be resolved at commit
+# time (SQLAlchemy: "could not find table 'users'").
+import models.journal  # noqa: F401, E402
+import models.user  # noqa: F401, E402
+import models.keys  # noqa: F401, E402
+import models.usage  # noqa: F401, E402
+
 from models.journal import JournalEntry, engine, ensure_schema  # noqa: E402
 from services.ingestion import score_mood_background  # noqa: E402
 
