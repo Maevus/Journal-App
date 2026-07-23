@@ -70,7 +70,9 @@ function App() {
             Mood trends
           </span>
           <div className="card-brutal p-6 pt-8">
-            <MoodChart range={range} source={source} />
+            {/* key={range.days}: picking a preset remounts the chart, clearing
+                any custom From/To window without a set-state-in-effect. */}
+            <MoodChart key={range.days} range={range} source={source} />
           </div>
         </section>
 

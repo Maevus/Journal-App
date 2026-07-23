@@ -41,3 +41,28 @@ def test_empty_db_with_source_filter_returns_no_stub(client, me):
     # A fake sinusoid for a specific source would be misleading → honest empty.
     trends = client.get("/trends", params={"days": 30, "source": "goodnotes"}).json()["trends"]
     assert trends == []
+
+
+def test_custom_start_end_window_overrides_days(client, add_entry):
+    """An explicit start/end date range filters to that window (end inclusive)
+    and ignores the `days` lookback."""
+    add_entry("before window", mood_score=0.2, timestamp=datetime(2024, 12, 31))
+    add_entry("inside", mood_score=0.6, timestamp=datetime(2025, 6, 1))
+    add_entry("on the end day", mood_score=0.8, timestamp=datetime(2025, 12, 31, 22, 0))
+    add_entry("after window", mood_score=0.9, timestamp=datetime(2026, 1, 2))
+
+    r = client.get("/trends", params={"start": "2025-01-01", "end": "2025-12-31", "days": 30})
+    assert r.status_code == 200
+    dates = {t["date"] for t in r.json()["trends"]}
+    assert dates == {"2025-06-01", "2025-12-31"}  # before/after excluded; end day kept
+
+
+def test_custom_window_with_no_entries_returns_empty_not_stub(client, add_entry):
+    """An empty custom range shows an honest empty chart, not the sinusoid stub."""
+    add_entry("far outside", mood_score=0.5, timestamp=datetime(2020, 1, 1))
+    r = client.get("/trends", params={"start": "2025-01-01", "end": "2025-01-31"})
+    assert r.json()["trends"] == []
+
+
+def test_bad_date_is_rejected(client, me):
+    assert client.get("/trends", params={"start": "not-a-date", "end": "2025-01-01"}).status_code == 422

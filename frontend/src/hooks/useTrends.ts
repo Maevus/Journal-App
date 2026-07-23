@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react'
 import { fetchTrends, type TrendPoint } from '../api/client'
 
-export function useTrends(days = 30, source: string | null = null) {
+export function useTrends(
+  days = 30,
+  source: string | null = null,
+  start: string | null = null,
+  end: string | null = null,
+) {
   const [data, setData] = useState<TrendPoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -9,7 +14,7 @@ export function useTrends(days = 30, source: string | null = null) {
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    fetchTrends(days, source)
+    fetchTrends(days, source, start, end)
       .then((points) => {
         if (!cancelled) setData(points)
       })
@@ -22,7 +27,7 @@ export function useTrends(days = 30, source: string | null = null) {
     return () => {
       cancelled = true
     }
-  }, [days, source])
+  }, [days, source, start, end])
 
   return { data, loading, error }
 }

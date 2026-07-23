@@ -1,5 +1,6 @@
 from collections import defaultdict
-from datetime import timedelta
+from datetime import date as date_cls
+from datetime import datetime, time, timedelta
 
 from fastapi import APIRouter, Depends
 from sqlmodel import Session
@@ -16,6 +17,8 @@ router = APIRouter()
 async def get_trends(
     days: int = 30,  # calendar window; 0 = all time
     source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
+    start: date_cls | None = None,  # ISO "YYYY-MM-DD"; with `end`, overrides `days`
+    end: date_cls | None = None,  # inclusive of the whole end day
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
@@ -24,7 +27,15 @@ async def get_trends(
         .where(JournalEntry.mood_score.isnot(None))  # type: ignore[arg-type]
         .order_by(JournalEntry.timestamp.asc())
     )
-    if days > 0:
+    # An explicit start+end window wins over the `days` lookback; end is
+    # inclusive, so cover the whole end day with a half-open [start, end+1day).
+    custom_window = start is not None and end is not None
+    if custom_window:
+        query = query.where(JournalEntry.timestamp >= datetime.combine(start, time.min))
+        query = query.where(
+            JournalEntry.timestamp < datetime.combine(end, time.min) + timedelta(days=1)
+        )
+    elif days > 0:
         cutoff = utcnow_naive() - timedelta(days=days)
         query = query.where(JournalEntry.timestamp >= cutoff)
     if source:
@@ -41,8 +52,9 @@ async def get_trends(
     ]
 
     # Return stub data when no scored entries exist yet. Skipped when a source
-    # filter is set — an empty chart is honest there, a fake sinusoid is not.
-    if not trends and source is None:
+    # filter or an explicit date window is set — an empty chart is honest there,
+    # a fake sinusoid is not.
+    if not trends and source is None and not custom_window:
         stub_days = days or 30
         today = utcnow_naive().date()
         import random, math  # noqa: E401

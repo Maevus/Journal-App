@@ -84,6 +84,21 @@ describe('fetchTrends', () => {
     expect(fn).toHaveBeenCalledWith(`${BASE}/trends?days=30&source=goodnotes`, { credentials: 'include' })
   })
 
+  it('adds a custom start/end window when both are given', async () => {
+    const fn = mockFetch({ trends: [] })
+    await fetchTrends(30, null, '2025-01-01', '2025-12-31')
+    expect(fn).toHaveBeenCalledWith(
+      `${BASE}/trends?days=30&start=2025-01-01&end=2025-12-31`,
+      { credentials: 'include' },
+    )
+  })
+
+  it('omits the window unless both start and end are set', async () => {
+    const fn = mockFetch({ trends: [] })
+    await fetchTrends(30, null, '2025-01-01', null)
+    expect(fn.mock.calls[0][0]).not.toContain('start')
+  })
+
   it('throws on a non-ok response', async () => {
     mockFetch(null, false, 'Server Error')
     await expect(fetchTrends()).rejects.toThrow(/Trends failed/)

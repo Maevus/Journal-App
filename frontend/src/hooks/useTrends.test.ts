@@ -14,7 +14,7 @@ describe('useTrends', () => {
     await waitFor(() => expect(result.current.loading).toBe(false))
     expect(result.current.data).toEqual([{ date: '2026-05-10', score: 0.5 }])
     expect(result.current.error).toBeNull()
-    expect(fetchTrends).toHaveBeenCalledWith(30, null)
+    expect(fetchTrends).toHaveBeenCalledWith(30, null, null, null)
   })
 
   it('captures the error message on failure', async () => {

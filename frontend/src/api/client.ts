@@ -75,10 +75,20 @@ export async function searchEntries(
   return res.json() as Promise<{ results: SearchResult[] }>
 }
 
-export async function fetchTrends(days = 30, source: string | null = null): Promise<TrendPoint[]> {
-  // days=0 → all time; source=null → all sources
+export async function fetchTrends(
+  days = 30,
+  source: string | null = null,
+  start: string | null = null,
+  end: string | null = null,
+): Promise<TrendPoint[]> {
+  // days=0 → all time; source=null → all sources. A start+end pair (ISO
+  // "YYYY-MM-DD") is a custom window that overrides days server-side.
   const params = new URLSearchParams({ days: String(days) })
   if (source) params.set('source', source)
+  if (start && end) {
+    params.set('start', start)
+    params.set('end', end)
+  }
   const res = await fetch(`${BASE_URL}/trends?${params}`, { credentials: 'include' })
   reportIfAuthExpired(res)
   if (!res.ok) throw new Error(`Trends failed: ${res.statusText}`)
