@@ -44,9 +44,9 @@ uvicorn main:app --reload
 
 **Imports are absolute from `backend/`** — always run `uvicorn` (and `pytest`) from within `backend/`, not the repo root.
 
-Tests live in `backend/tests/` (pytest + pytest-asyncio + pytest-cov, `asyncio_mode=auto` via `pytest.ini`; coverage prints on every run). They use an in-memory SQLite DB and mock the external boundaries (Chroma, the Anthropic client, gkeepapi, the filesystem), so they never touch `journal.db`, Chroma, or the network. Coverage is ~88%: the ingest dedup engine, date parsing, OCR helpers, the `ensure_schema` migration, mood scoring, all five router endpoints (via `TestClient` with `get_session` overridden — see the `client`/`add_entry` fixtures in `conftest.py`), and the LLM/embeddings wrappers. Lowest-covered remainder: `main.py` lifespan and the iCloud `brctl` download path.
+Tests live in `backend/tests/` (pytest + pytest-asyncio + pytest-cov, `asyncio_mode=auto` via `pytest.ini`; coverage prints on every run). They use an in-memory SQLite DB and mock the external boundaries (Chroma, the Anthropic client, gkeepapi, the filesystem), so they never touch `journal.db`, Chroma, or the network. Coverage is ~88%: the ingest dedup engine, date parsing, OCR helpers, the Alembic migration/drift guard (`test_migrations.py`), mood scoring, all five router endpoints (via `TestClient` with `get_session` overridden — see the `client`/`add_entry` fixtures in `conftest.py`), and the LLM/embeddings wrappers. Lowest-covered remainder: `main.py` lifespan and the iCloud `brctl` download path.
 
-Database: SQLite (`journal.db`) via SQLModel; `engine` and `get_session` live in `models/journal.py` and are imported directly by routers and services.
+Database: **Postgres** in real mode (ADR 0003 — the multi-user engine), SQLite for tests + demo. `engine` and `get_session` live in `models/journal.py`; the engine's connect args branch on the URL scheme (`check_same_thread`/`pool_pre_ping`). Point the app at Postgres via `DATABASE_URL=postgresql+psycopg://…` (see `.env.example`); a local server is `docker compose up -d db` (`backend/docker-compose.yml`, `postgres:18`). **Schema is managed by Alembic** (`backend/alembic/`) — `alembic upgrade head`, and the app also self-migrates on startup (`main._run_migrations`). One-time SQLite→Postgres data copy: `scripts/migrate_sqlite_to_pg.py` (preserves ids so Chroma stays aligned). Deferred to the hardening phase: RLS + KMS envelope.
 
 SSE format: each token is JSON-encoded (`json.dumps(token)`) so newlines survive the `data: …\n\n` SSE frame. The frontend `JSON.parse`s each event.
 
@@ -77,7 +77,7 @@ Tests use Vitest + Testing Library (jsdom) — config lives in `vite.config.ts` 
 
 ## Key design decisions
 
-- **Stop conditions** (check before doing): modifying `JournalEntry` schema, adding DB migrations, adding auth/user accounts, adding dependencies not in `requirements.txt` / `package.json`.
+- **Stop conditions** (check before doing): modifying `JournalEntry` schema, adding auth/user accounts, adding dependencies not in `requirements.txt` / `package.json`. (Schema changes now go through an Alembic revision — `alembic revision --autogenerate` — rather than the removed `ensure_schema` shim; `tests/test_migrations.py` guards model/migration drift.)
 - **Ingestion stub**: accepts a plain `{"entries": ["…"], "source": "text"}` payload — Google Keep / GoodNotes API auth is not yet implemented.
 - **Trends stub**: returns deterministic sinusoidal data when no scored entries exist, so `MoodChart` renders immediately.
 - **Future**: multi-user, Postgres, GDPR-compliant isolation. The `source` field and content-hash dedup are designed to be idempotent across future import connectors.

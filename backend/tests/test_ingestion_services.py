@@ -4,12 +4,31 @@ from datetime import datetime
 from types import SimpleNamespace
 
 import pypdf
+import pytest
 from sqlmodel import select
 
 import services.ingestion as ing
 from models.journal import JournalEntry
+from models.user import User
 from services.ingestion import RawEntry
 from services.quota import QuotaExceededError
+
+
+@pytest.fixture
+def sync_owner(session, monkeypatch):
+    """Give the Keep/GoodNotes connectors a resolvable owner.
+
+    Both resolve their rows' owner via `_resolve_sync_owner` (GOOGLE_EMAIL → the
+    matching user). Since the Postgres migration JournalEntry.user_id is NOT
+    NULL, so a sync with no resolvable owner ingests nothing — set up the env +
+    a matching user so persistence tests actually persist. Returns the owner.
+    """
+    owner = User(google_sub="sync-owner", email="sync@owner.com")
+    session.add(owner)
+    session.commit()
+    session.refresh(owner)
+    monkeypatch.setenv("GOOGLE_EMAIL", "sync@owner.com")
+    return owner
 
 
 # --- _rescue_regressed_date -------------------------------------------------
@@ -32,6 +51,7 @@ def test_rescue_regressed_date_no_header_returns_none():
 
 def test_page_already_imported(session):
     session.add(JournalEntry(
+        user_id=1,
         source="goodnotes", content="p", content_hash="h1",
         external_id="Journal.pdf#p1", imported_at=datetime(2026, 1, 11),
     ))
@@ -45,6 +65,7 @@ def test_page_already_imported(session):
 def test_page_already_imported_ignores_other_sources(session):
     # Same external_id under a different source must not count as imported.
     session.add(JournalEntry(
+        user_id=1,
         source="google_keep", content="p", content_hash="h2",
         external_id="Journal.pdf#p1",
     ))
@@ -56,6 +77,7 @@ def test_page_already_imported_ignores_other_sources(session):
 
 def test_redate_inline_updates_from_header(session):
     e = JournalEntry(
+        user_id=1,
         source="text", content="20 Jan 2026\nbody", content_hash="h1", timestamp=datetime(2026, 1, 1)
     )
     session.add(e)
@@ -93,7 +115,7 @@ def test_fetch_keep_entries(monkeypatch):
 
 # --- ingest_keep (uses _fetch_keep_entries via executor) -------------------
 
-async def test_ingest_keep_persists_notes(session, monkeypatch):
+async def test_ingest_keep_persists_notes(session, monkeypatch, sync_owner):
     monkeypatch.setattr(
         ing, "_fetch_keep_entries",
         lambda: [RawEntry(content="keep note", external_id="k1", timestamp=datetime(2026, 1, 5))],
@@ -156,7 +178,7 @@ def _write_pdf(path):
         writer.write(fh)
 
 
-async def test_ingest_goodnotes_ingests_page(session, monkeypatch, tmp_path):
+async def test_ingest_goodnotes_ingests_page(session, monkeypatch, tmp_path, sync_owner):
     _write_pdf(tmp_path / "Journal.pdf")
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
 
@@ -185,7 +207,7 @@ async def test_ingest_goodnotes_skips_blank_pages(session, monkeypatch, tmp_path
     assert stats["ingested"] == 0
 
 
-async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path):
+async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path, sync_owner):
     (tmp_path / "photo.png").write_bytes(b"\x89PNG fake-bytes")
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
 
@@ -200,7 +222,7 @@ async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path):
 
 
 async def test_ingest_goodnotes_quota_stops_scan_but_keeps_paid_pages(
-    session, monkeypatch, tmp_path
+    session, monkeypatch, tmp_path, sync_owner
 ):
     """A quota refusal mid-scan stops further OCR (every later call would be
     refused too) but still ingests the pages already transcribed — that money
@@ -257,7 +279,7 @@ def _setup_goodnotes(monkeypatch, tmp_path, spy):
     monkeypatch.setattr(ing, "_ocr_with_claude", spy)
 
 
-async def test_ingest_goodnotes_skips_already_imported_pages(session, monkeypatch, tmp_path):
+async def test_ingest_goodnotes_skips_already_imported_pages(session, monkeypatch, tmp_path, sync_owner):
     # Re-exporting the SAME multi-page PDF must not re-OCR existing pages.
     _write_pdf_pages(tmp_path / "Journal.pdf", 3)
     spy = _OCRSpy()
@@ -274,7 +296,7 @@ async def test_ingest_goodnotes_skips_already_imported_pages(session, monkeypatc
     assert scored2 == []
 
 
-async def test_ingest_goodnotes_ocrs_only_new_page_on_append(session, monkeypatch, tmp_path):
+async def test_ingest_goodnotes_ocrs_only_new_page_on_append(session, monkeypatch, tmp_path, sync_owner):
     # A re-export with one extra appended page OCRs only that new page.
     pdf = tmp_path / "Journal.pdf"
     _write_pdf_pages(pdf, 2)
@@ -305,6 +327,7 @@ async def test_ingest_goodnotes_force_reocrs_all_pages(session, monkeypatch, tmp
 
 async def test_redate_keep_updates_timestamp(session, monkeypatch):
     e = JournalEntry(
+        user_id=1,
         source="google_keep", content="keep note",
         content_hash=ing.compute_hash("keep note"), timestamp=datetime(2026, 1, 1),
     )

@@ -2,11 +2,12 @@ import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session, SQLModel
+from sqlmodel import Session
 from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
@@ -47,6 +48,31 @@ def _configure_logging() -> None:
     root.addHandler(handler)
     root.setLevel(logging.INFO)
     root._journal_configured = True  # type: ignore[attr-defined]
+
+
+def _run_migrations() -> None:
+    """Bring the database schema up to head via Alembic — the replacement for
+    the old create_all + ensure_schema() startup.
+
+    Best-effort and logged (like the Keep sync below): a fresh DB is built to
+    head; an already-migrated DB is a no-op. Kept in the lifespan so plain
+    `uvicorn main:app` still self-migrates. A legacy pre-Alembic DB (tables but
+    no alembic_version) needs a one-time `alembic stamp head` — the demo seed and
+    the SQLite→Postgres copy both stamp/upgrade, so this only surprises a stray
+    old journal.db, which now logs a clear warning instead of failing boot.
+    """
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(Path(__file__).resolve().parent / "alembic"))
+    try:
+        command.upgrade(cfg, "head")
+    except Exception:  # noqa: BLE001
+        logger.exception(
+            "alembic upgrade failed; if this is a legacy pre-Alembic DB, run "
+            "`alembic stamp head` once. Continuing with the existing schema."
+        )
 
 
 def _sync_on_startup_enabled() -> bool:
@@ -120,8 +146,7 @@ async def lifespan(app: FastAPI):
         config.CHROMA_PERSIST_DIR,
         config.SYNC_ON_STARTUP,
     )
-    SQLModel.metadata.create_all(engine)
-    models.journal.ensure_schema()  # add columns missing from a pre-existing DB
+    _run_migrations()  # bring schema to head (Alembic; replaces create_all + ensure_schema)
     # Fire-and-forget so the server is usable immediately; new notes fold in
     # moments later rather than blocking boot on a full Keep sync.
     sync_task = asyncio.create_task(_startup_keep_sync()) if _sync_on_startup_enabled() else None

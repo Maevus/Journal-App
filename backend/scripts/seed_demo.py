@@ -251,6 +251,18 @@ DEMO_ENTRIES: list[tuple[int, int, str, float, str]] = [
 ]
 
 
+def _stamp_alembic_head() -> None:
+    """Mark the demo DB as being at the latest migration without running any DDL
+    (the schema already exists from create_all). config.DATABASE_URL is the demo
+    db here (APP_MODE=demo), which env.py picks up."""
+    from alembic import command
+    from alembic.config import Config
+
+    cfg = Config()
+    cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
+    command.stamp(cfg, "head")
+
+
 def _demo_reasoning(mood: float) -> str:
     """Canned, score-band reasoning so demo entries have hover text without an
     LLM call (real entries get a per-entry reasoning from the scorer)."""
@@ -273,6 +285,10 @@ def main() -> None:
         shutil.rmtree(DEMO_CHROMA)
 
     SQLModel.metadata.create_all(engine)
+    # The app self-migrates on startup (main._run_migrations → alembic upgrade
+    # head). Stamp this freshly-built DB at head so that startup is a clean no-op
+    # instead of trying to re-CREATE the tables create_all just made.
+    _stamp_alembic_head()
 
     now = utcnow_naive()
     goodnotes_page = 0

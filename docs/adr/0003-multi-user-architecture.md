@@ -52,6 +52,16 @@ forget, not relying on memory:
 > This section is the one decision with a known independent future (a managed-host
 > change, or revisiting the engine). If that changes, supersede *this section* with a
 > follow-up ADR rather than disturbing the rest.
+>
+> **Update (2026-07-23): the engine move landed.** Freemium (F1–F5) shipped on
+> SQLite first (a deliberate deviation from "Postgres now"); this is the deferred
+> catch-up. Alembic replaced `ensure_schema()`; `JournalEntry.user_id` is now NOT
+> NULL (ownerless connector syncs skip rather than orphan); local dev runs
+> `postgres:18` via `backend/docker-compose.yml`; `scripts/migrate_sqlite_to_pg.py`
+> copies the real data preserving ids (Chroma stays aligned). **RLS and the KMS
+> envelope below are deferred to the hardening phase** — app-layer isolation
+> (`user_entries` + Chroma metadata filter) remains the enforced boundary meanwhile.
+> The managed prod host + CI/CD stay with the deploy work.
 
 Postgres, now — not "SQLite then migrate." A public launch means concurrent
 strangers (SQLite's single-writer lock stalls under load), deployed apps run multiple

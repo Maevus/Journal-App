@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import Date, cast, or_
 from sqlmodel import Session, func, select
 
 import config
@@ -21,6 +21,20 @@ from models.usage import LLMUsage
 from services import key_store
 
 logger = logging.getLogger(__name__)
+
+
+def _day_bucket(col):
+    """Group a timestamp column by calendar day, portably across dialects.
+
+    SQLite has no date type, so `func.date(col)` returns a 'YYYY-MM-DD' string —
+    the app's convention. Postgres has no plain `date()` scalar, so cast to DATE
+    there (the driver hands back a `datetime.date`, whose `str()` is the same ISO
+    string). Both feed the same `by_date` key that daily's `.date().isoformat()`
+    looks up. The SELECT and GROUP BY must use the identical expression.
+    """
+    if engine.dialect.name == "postgresql":
+        return cast(col, Date)
+    return func.date(col)
 
 
 class QuotaExceededError(Exception):
@@ -157,15 +171,16 @@ def usage_snapshot(*, user_id: int, days: int = 30) -> UsageSnapshot:
             .where(LLMUsage.user_id == user_id)
             .where(LLMUsage.created_at >= day_start)
         ).one()
+        day = _day_bucket(LLMUsage.created_at)
         rows = session.exec(
             select(
-                func.date(LLMUsage.created_at),
+                day,
                 func.coalesce(func.sum(LLMUsage.cost), 0.0),
                 func.count(LLMUsage.id),
             )
             .where(LLMUsage.user_id == user_id)
             .where(LLMUsage.created_at >= window_start)
-            .group_by(func.date(LLMUsage.created_at))
+            .group_by(day)
         ).all()
 
     by_date = {str(day): (spent, calls) for day, spent, calls in rows}

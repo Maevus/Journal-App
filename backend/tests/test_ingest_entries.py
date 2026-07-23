@@ -12,7 +12,7 @@ def _all(session):
 
 
 def test_inserts_new_entry(session):
-    stats, scored = ingest_entries(["a good day"], "text", session)
+    stats, scored = ingest_entries(["a good day"], "text", session, user_id=1)
     assert stats == {"ingested": 1, "updated": 0, "skipped": 0}
     rows = _all(session)
     assert len(rows) == 1
@@ -25,7 +25,7 @@ def test_inserts_new_entry(session):
 
 
 def test_skips_blank_entries(session):
-    stats, scored = ingest_entries(["", "   ", "\n\t"], "text", session)
+    stats, scored = ingest_entries(["", "   ", "\n\t"], "text", session, user_id=1)
     assert stats["ingested"] == 0
     assert stats["skipped"] == 3
     assert _all(session) == []
@@ -33,15 +33,15 @@ def test_skips_blank_entries(session):
 
 
 def test_skips_exact_duplicate_within_batch(session):
-    stats, _ = ingest_entries(["dupe", "dupe"], "text", session)
+    stats, _ = ingest_entries(["dupe", "dupe"], "text", session, user_id=1)
     assert stats["ingested"] == 1
     assert stats["skipped"] == 1
     assert len(_all(session)) == 1
 
 
 def test_dedup_is_whitespace_insensitive(session):
-    ingest_entries(["hello world"], "text", session)
-    stats, scored = ingest_entries(["  hello world  "], "text", session)
+    ingest_entries(["hello world"], "text", session, user_id=1)
+    stats, scored = ingest_entries(["  hello world  "], "text", session, user_id=1)
     assert stats["ingested"] == 0
     assert stats["skipped"] == 1
     assert scored == []
@@ -49,11 +49,11 @@ def test_dedup_is_whitespace_insensitive(session):
 
 
 def test_external_id_edit_updates_in_place(session):
-    ingest_entries([RawEntry(content="v1", external_id="k1")], "google_keep", session)
+    ingest_entries([RawEntry(content="v1", external_id="k1")], "google_keep", session, user_id=1)
     first_id = _all(session)[0].id
 
     stats, scored = ingest_entries(
-        [RawEntry(content="v2", external_id="k1")], "google_keep", session
+        [RawEntry(content="v2", external_id="k1")], "google_keep", session, user_id=1
     )
     assert stats == {"ingested": 0, "updated": 1, "skipped": 0}
     rows = _all(session)
@@ -65,9 +65,9 @@ def test_external_id_edit_updates_in_place(session):
 
 
 def test_external_id_unchanged_content_is_skipped(session):
-    ingest_entries([RawEntry(content="same", external_id="k1")], "google_keep", session)
+    ingest_entries([RawEntry(content="same", external_id="k1")], "google_keep", session, user_id=1)
     stats, scored = ingest_entries(
-        [RawEntry(content="same", external_id="k1")], "google_keep", session
+        [RawEntry(content="same", external_id="k1")], "google_keep", session, user_id=1
     )
     assert stats == {"ingested": 0, "updated": 0, "skipped": 1}
     assert scored == []
@@ -75,20 +75,20 @@ def test_external_id_unchanged_content_is_skipped(session):
 
 
 def test_edit_resets_mood(session):
-    ingest_entries([RawEntry(content="v1", external_id="k1")], "google_keep", session)
+    ingest_entries([RawEntry(content="v1", external_id="k1")], "google_keep", session, user_id=1)
     row = _all(session)[0]
     row.mood_score = 0.7
     row.mood_reasoning = "happy"
     session.add(row)
     session.commit()
 
-    ingest_entries([RawEntry(content="v2", external_id="k1")], "google_keep", session)
+    ingest_entries([RawEntry(content="v2", external_id="k1")], "google_keep", session, user_id=1)
     row = _all(session)[0]
     assert row.mood_score is None
     assert row.mood_reasoning is None
 
 
 def test_inline_date_header_sets_timestamp(session):
-    ingest_entries(["20 Jan 2026\nGreat start to the year."], "text", session)
+    ingest_entries(["20 Jan 2026\nGreat start to the year."], "text", session, user_id=1)
     row = _all(session)[0]
     assert row.timestamp.date() == datetime(2026, 1, 20).date()

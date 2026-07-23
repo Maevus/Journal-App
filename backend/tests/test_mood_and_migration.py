@@ -1,34 +1,14 @@
-"""Tests for the schema migration and the mood-scoring write-back."""
-import sqlite3
+"""Tests for the mood-scoring write-back.
 
+(Schema migration is now Alembic's — see test_migrations.py. The old
+ensure_schema() SQLite shim it used to test was removed at the Postgres move.)
+"""
 import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
 
-import models.journal as journal
 import services.ingestion as ingestion
 from models.journal import JournalEntry
-
-
-def test_ensure_schema_adds_missing_column(monkeypatch, tmp_path):
-    db = tmp_path / "old.db"
-    # Simulate a DB created before mood_reasoning existed.
-    con = sqlite3.connect(db)
-    con.execute("CREATE TABLE journalentry (id INTEGER PRIMARY KEY, content TEXT, content_hash TEXT)")
-    con.commit()
-    con.close()
-
-    eng = create_engine(f"sqlite:///{db}")
-    monkeypatch.setattr(journal, "engine", eng)
-    journal.ensure_schema()
-    journal.ensure_schema()  # idempotent — must not error or duplicate
-    eng.dispose()
-
-    con = sqlite3.connect(db)
-    cols = [r[1] for r in con.execute("PRAGMA table_info(journalentry)")]
-    con.close()
-    assert "mood_reasoning" in cols
-    assert "user_id" in cols  # multi-user isolation column (ADR 0003)
 
 
 @pytest.fixture
@@ -46,7 +26,11 @@ def mood_engine(monkeypatch):
 
 def _make_entry(engine) -> int:
     with Session(engine) as s:
-        e = JournalEntry(source="text", content="x", content_hash="h-" + str(id(engine)))
+        # user_id is NOT NULL since the Postgres migration; SQLite doesn't
+        # enforce the FK, so a bare owner id is enough for these unit tests.
+        e = JournalEntry(
+            source="text", content="x", content_hash="h-" + str(id(engine)), user_id=1
+        )
         s.add(e)
         s.commit()
         s.refresh(e)

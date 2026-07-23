@@ -126,8 +126,7 @@ def me(login):
     return login()
 
 
-# Sentinel default for add_entry's user_id: "owned by `me`". Distinct from None,
-# which explicitly means a legacy unowned row.
+# Sentinel default for add_entry's user_id: "owned by `me`".
 _OWNED_BY_ME = object()
 
 
@@ -136,8 +135,9 @@ def add_entry(client, request):
     """Insert a JournalEntry into the client's DB. Returns the persisted row.
 
     Owned by `me` by default (lazily logging the client in), since scoped reads
-    only see the logged-in user's rows. Pass user_id=None for a legacy unowned
-    row, or another user's id for cross-user isolation tests.
+    only see the logged-in user's rows. Pass another user's id for cross-user
+    isolation tests. `user_id` is NOT NULL since the Postgres migration, so an
+    ownerless row is no longer a valid state.
     """
     def _add(content, *, user_id=_OWNED_BY_ME, source="text", mood_score=None,
              mood_reasoning=None, timestamp=None, external_id=None):

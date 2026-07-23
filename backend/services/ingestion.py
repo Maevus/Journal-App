@@ -134,14 +134,26 @@ def ingest_entries(
     was edited at its source — it is updated in place (content, hash, date,
     re-embedded, mood reset) rather than duplicated. Both tiers are scoped to
     `user_id` (ADR 0003): identical text from two accounts must both persist,
-    and one user's source-edit must never overwrite another's row. `None`
-    means unowned — the user-less startup sync paths; their rows are
-    backfilled to the owner at the Postgres migration.
+    and one user's source-edit must never overwrite another's row. `user_id` is
+    required (JournalEntry.user_id is NOT NULL since the Postgres migration);
+    None means the connector's owner isn't resolvable yet — see the guard below.
 
     Accepts plain strings (timestamped at ingest time) or RawEntry tuples that
     carry the source's own authored date. Returns (stats_dict, entries needing
     mood scoring — both newly inserted and updated).
     """
+    if user_id is None:
+        # Since the Postgres migration JournalEntry.user_id is NOT NULL, so an
+        # unowned row can't be inserted. A connector sync whose owner isn't
+        # resolvable yet (its account hasn't logged in) ingests nothing and
+        # defers — the pages re-present on the next sync once the owner exists —
+        # rather than crashing on the NOT NULL insert.
+        logger.info(
+            "Ingest skipped for source %r: no owner resolved (%d item(s) deferred)",
+            source, len(raw_entries),
+        )
+        return {"ingested": 0, "updated": 0, "skipped": len(raw_entries)}, []
+
     new_entries: List[JournalEntry] = []
     updated_entries: List[JournalEntry] = []
     skipped = 0

@@ -47,12 +47,16 @@ def test_writes_stamp_the_owner(session):
     assert [e.user_id for e in entries] == [7]
 
 
-def test_unowned_ingest_still_works(session):
-    """Startup Keep sync / GoodNotes scan run outside a request — no user.
-    Their rows stay unowned (NULL) until the recorded backfill migration."""
-    _, entries = ingest_entries(["Legacy note."], "text", session)
+def test_ownerless_ingest_is_skipped(session):
+    """Startup Keep sync / GoodNotes scan run outside a request. Since the
+    Postgres migration JournalEntry.user_id is NOT NULL, so a sync whose owner
+    can't be resolved yet (its account hasn't logged in) ingests nothing and
+    defers — no orphaned NULL-owner row."""
+    stats, entries = ingest_entries(["Legacy note."], "text", session)
 
-    assert [e.user_id for e in entries] == [None]
+    assert entries == []
+    assert stats == {"ingested": 0, "updated": 0, "skipped": 1}
+    assert session.exec(select(JournalEntry)).all() == []
 
 
 def test_ingest_requires_login(client):
@@ -275,17 +279,6 @@ def test_retrieval_scopes_the_vector_query_itself(session, monkeypatch):
     monkeypatch.setattr(retrieval, "search_similar", fake_search_similar)
     retrieval.hybrid_search(session, "climbing", 5, user_id=2)
     assert seen["user_id"] == 2
-
-
-def test_legacy_unowned_rows_are_invisible_until_backfilled(client, me, add_entry):
-    """NULL user_id rows (pre-multi-user, or startup sync before the owner
-    logs in) don't belong to anyone — scripts/backfill_owner.py is the bridge."""
-    from datetime import datetime
-
-    add_entry("pre-multi-user row", user_id=None, timestamp=datetime(2026, 5, 10, 12))
-
-    entries = client.get("/entries", params={"date": "2026-05-10"}).json()["entries"]
-    assert entries == []
 
 
 def test_source_edit_update_is_user_scoped(session):

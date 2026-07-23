@@ -32,7 +32,7 @@ from dotenv import load_dotenv  # noqa: E402
 
 load_dotenv()
 
-from sqlmodel import Session, SQLModel, select  # noqa: E402
+from sqlmodel import Session, select  # noqa: E402
 
 # Register every table in the shared metadata, as main.py does — otherwise
 # JournalEntry.user_id's foreign key to `users` can't be resolved at commit
@@ -42,7 +42,7 @@ import models.user  # noqa: F401, E402
 import models.keys  # noqa: F401, E402
 import models.usage  # noqa: F401, E402
 
-from models.journal import JournalEntry, engine, ensure_schema  # noqa: E402
+from models.journal import JournalEntry, engine  # noqa: E402
 from services.ingestion import score_mood_background  # noqa: E402
 
 
@@ -55,9 +55,8 @@ def _missing(session: Session) -> list[JournalEntry]:
 
 
 async def main() -> None:
-    SQLModel.metadata.create_all(engine)
-    ensure_schema()  # make sure the mood_reasoning column exists first
-
+    # Schema is Alembic-managed now (the app self-migrates on startup); this
+    # backfill assumes the DB is already at head.
     with Session(engine) as session:
         todo = [(e.id, e.content, e.user_id) for e in _missing(session)]
 
