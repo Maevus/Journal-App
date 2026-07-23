@@ -9,6 +9,7 @@ import {
 } from 'recharts'
 import { useState } from 'react'
 import { useTrends } from '../hooks/useTrends'
+import { DatePicker } from './DatePicker'
 import { DayDetail } from './DayDetail'
 import { SkeletonLoader } from './SkeletonLoader'
 import type { SourceFilter } from './SourceSelector'
@@ -18,9 +19,6 @@ import type { TimeRange } from './TimeRangeSelector'
 const ddmm = (iso: string) => `${iso.slice(8, 10)}-${iso.slice(5, 7)}`
 const mmyy = (iso: string) => `${iso.slice(5, 7)}-${iso.slice(2, 4)}`
 const ddmmyyyy = (iso: string) => `${iso.slice(8, 10)}-${iso.slice(5, 7)}-${iso.slice(0, 4)}`
-
-const dateInputClass =
-  'rounded-brutal border-2 border-ink bg-white px-2 py-1 text-sm font-medium text-ink focus:outline-none focus-visible:outline-2 focus-visible:outline-dashed focus-visible:outline-ink'
 
 interface MoodChartProps {
   range: TimeRange
@@ -62,28 +60,24 @@ export function MoodChart({ range, source }: MoodChartProps) {
           {source.value && ` · ${source.label.toLowerCase()}`}
         </span>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 text-sm font-medium text-ink/60">
+          <span className="flex items-center gap-2 text-sm font-medium text-ink/60">
             From
-            <input
-              type="date"
-              aria-label="Range start"
-              value={customStart ?? ''}
+            <DatePicker
+              label="Range start"
+              value={customStart}
               max={customEnd ?? undefined}
-              onChange={(e) => setCustomStart(e.target.value || null)}
-              className={dateInputClass}
+              onChange={setCustomStart}
             />
-          </label>
-          <label className="flex items-center gap-2 text-sm font-medium text-ink/60">
+          </span>
+          <span className="flex items-center gap-2 text-sm font-medium text-ink/60">
             To
-            <input
-              type="date"
-              aria-label="Range end"
-              value={customEnd ?? ''}
+            <DatePicker
+              label="Range end"
+              value={customEnd}
               min={customStart ?? undefined}
-              onChange={(e) => setCustomEnd(e.target.value || null)}
-              className={dateInputClass}
+              onChange={setCustomEnd}
             />
-          </label>
+          </span>
           {(customStart || customEnd) && (
             <button
               onClick={() => {
@@ -95,15 +89,10 @@ export function MoodChart({ range, source }: MoodChartProps) {
               Clear
             </button>
           )}
-          <label className="flex items-center gap-2 text-sm font-medium text-ink/60">
+          <span className="flex items-center gap-2 text-sm font-medium text-ink/60">
             View a day
-            <input
-              type="date"
-              value={selectedDate ?? ''}
-              onChange={(e) => setSelectedDate(e.target.value || null)}
-              className={dateInputClass}
-            />
-          </label>
+            <DatePicker label="View a day" value={selectedDate} onChange={setSelectedDate} />
+          </span>
         </div>
       </div>
       {data.length === 0 && (
