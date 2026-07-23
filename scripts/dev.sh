@@ -55,6 +55,14 @@ if [ "$mode" != "demo" ] && [ "$mode" != "real" ]; then
 fi
 
 # --- backend ---
+# Real mode runs on Postgres (ADR 0003). Set the URL here rather than pinning it
+# in .env — a pinned DATABASE_URL would override APP_MODE=demo's derived
+# demo_journal.db and silently point the demo at the real DB. Demo mode leaves it
+# unset so config derives SQLite. An already-set DATABASE_URL (e.g. a managed
+# prod host) still wins. Start Postgres first: `cd backend && docker compose up -d db`.
+if [ "$mode" = "real" ]; then
+  export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://journal:journal@localhost:5432/journal}"
+fi
 kill_port "$API_PORT"
 ( cd "$BACKEND" && APP_MODE="$mode" .venv/bin/uvicorn main:app --port "$API_PORT" \
     >"$BACKEND_LOG" 2>&1 & )
