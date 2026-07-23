@@ -405,3 +405,49 @@ The three gaps flagged in the F3/F4 handoffs, closed in one pass:
   403), and `UsagePanel`'s tier chip reads "Demo" instead of the misleading
   "Free tier". Carried on the existing auth probe rather than a new
   `/config` endpoint — one fetch, and the flag is only meaningful logged in.
+
+## Ask-agent mood access, chart date range, logging, demo-auth polish (2026-07-22 → 23)
+
+- **The Ask agent now sees mood scores — which were never in Chroma.** Chroma
+  holds only content embeddings + a `user_id` tag; the computed `mood_score`
+  lives on `JournalEntry` (SQL), and `hybrid_search` already returns full rows,
+  so the data was in hand — chat just dropped it. Two additions:
+  (1) each retrieved entry's context block now carries its `0–1` mood (or
+  `unscored`); (2) `retrieval.mood_summary()` aggregates overall + per-year
+  averages over the user's scored entries and chat injects it, so average/trend
+  questions — which RAG's ~8 retrieved entries can't answer — work off the full
+  dataset. `chat_v2.yaml` explains the score is computed sentiment, distinct
+  from any rating written in the entry text. **No SQL-injection surface**
+  (Maeve asked): the summary is a fixed parameterized-ORM aggregation, the
+  question never enters SQL; the only raw SQL in the repo is `ensure_schema`'s
+  fixed DDL. `mood_summary` takes an optional `start`/`end` window (the same one
+  chat parses for retrieval) so a time-scoped mood question summarises that
+  period; unscoped stays whole-journal.
+- **Custom date range on the mood chart** — `GET /trends` accepts end-inclusive
+  `start`/`end` dates that override the `days` lookback (the sinusoid stub is
+  suppressed for a custom window, as for a source filter). `MoodChart` gained
+  From/To pickers; picking a preset clears the window via a **remount `key`**
+  (`key={range.days}` in App) rather than a `useEffect` that clears state —
+  keeps the frontend off the `set-state-in-effect` lint rule. First-ever
+  MoodChart component test added.
+- **Root logging configured (`main._configure_logging`, in the lifespan)** —
+  uvicorn configures only its `uvicorn.*` loggers and leaves the root logger
+  handlerless, so every app-module `logger.info` fell to the WARNING lastResort
+  and vanished (21 call sites; the startup banner had to be a raw `print`). One
+  INFO StreamHandler on root fixes it; it lives in the lifespan so the
+  TestClient (which skips lifespan) leaves pytest's capture untouched. This is
+  what surfaced the login failure's actual cause.
+- **Login `invalid_client` was a stale-secret typo, not code** — a trailing `2`
+  on `GOOGLE_OAUTH_CLIENT_SECRET` in `.env` (36 chars vs the real 35). OAuth
+  login (Web-client `GOOGLE_OAUTH_CLIENT_ID/SECRET`) and Keep import (gkeepapi
+  `GOOGLE_APP_MASTER_TOKEN`) are fully independent — Keep synced 921 notes fine
+  throughout. `SESSION_SECRET` is now pinned in `.env` (was random-per-boot) so
+  a login survives a backend restart mid-handshake; it only signs the transient
+  `oauth_state` cookie, not the real session (a DB token).
+- **Demo mode hides real auth controls** — `AuthWidget` shows a "Demo mode"
+  badge with no sign-out in demo (sign-out nulled the user → dropped onto the
+  LoginGate → whose Google login can only error/be ignored, since
+  `get_current_user` hard-resolves to the demo user under `IS_DEMO`).
+- **Usage + API key are one tabbed card (`AccountPanel`)** — the sticker labels
+  double as tabs; opens on the API-key tab only when a signed-in non-demo user
+  has no key yet, else Usage. Replaces two half-empty side-by-side cards.
