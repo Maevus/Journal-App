@@ -1,58 +1,33 @@
-"""Tests for the Chroma vector-store wrapper (collection mocked — no real Chroma)."""
-from unittest.mock import MagicMock
+"""Unit tests for the pgvector embeddings wrapper — pure helpers + the
+off-Postgres degrade path (no real Postgres, no model download).
 
+Real vector behavior (embedding + ANN ranking + per-user isolation) is exercised
+against a live pgvector Postgres in test_embeddings_integration.py, gated on
+TEST_DATABASE_URL.
+"""
 import services.embeddings as emb
 
 
-def test_embed_and_store_upserts_with_owner_metadata(monkeypatch):
-    col = MagicMock()
-    monkeypatch.setattr(emb, "_get_collection", lambda: col)
-    emb.embed_and_store(5, "hello world", user_id=7)
-    col.upsert.assert_called_once_with(
-        documents=["hello world"], ids=["5"], metadatas=[{"user_id": 7}]
-    )
+def test_to_pgvector_format():
+    # pgvector text input: '[v1,v2,...]', no spaces.
+    assert emb._to_pgvector([0.5, -1.0, 2.0]) == "[0.5,-1.0,2.0]"
 
 
-def test_embed_and_store_unowned_omits_user_metadata(monkeypatch):
-    """user_id=None (user-less startup sync) → no user_id key at all: an absent
-    key matches no user's filter, mirroring SQL's invisible NULL rows."""
-    col = MagicMock()
-    monkeypatch.setattr(emb, "_get_collection", lambda: col)
-    emb.embed_and_store(5, "hello world", user_id=None)
-    col.upsert.assert_called_once_with(documents=["hello world"], ids=["5"])
+def test_embed_and_store_noops_off_postgres(monkeypatch):
+    """SQLite (tests / the interim demo) has no pgvector, so embed_and_store must
+    short-circuit before embedding or touching the DB."""
+    monkeypatch.setattr(emb, "_on_postgres", lambda: False)
+    embedded = []
+    monkeypatch.setattr(emb, "_embed", lambda content: embedded.append(content) or [0.0])
+
+    emb.embed_and_store(1, "hello world", user_id=1)  # must not raise
+    assert embedded == []  # never embedded
 
 
-def test_search_similar_empty_collection(monkeypatch):
-    col = MagicMock()
-    col.count.return_value = 0
-    monkeypatch.setattr(emb, "_get_collection", lambda: col)
+def test_search_similar_empty_off_postgres(monkeypatch):
+    monkeypatch.setattr(emb, "_on_postgres", lambda: False)
+    embedded = []
+    monkeypatch.setattr(emb, "_embed", lambda content: embedded.append(content) or [0.0])
+
     assert emb.search_similar("query", user_id=1) == []
-    col.query.assert_not_called()
-
-
-def test_search_similar_converts_distance_to_similarity(monkeypatch):
-    col = MagicMock()
-    col.count.return_value = 2
-    col.query.return_value = {"ids": [["1", "2"]], "distances": [[0.0, 3.0]]}
-    monkeypatch.setattr(emb, "_get_collection", lambda: col)
-
-    result = emb.search_similar("query", limit=10, user_id=3)
-    # similarity = 1 / (1 + distance)
-    assert result == [(1, 1.0), (2, 0.25)]
-    col.query.assert_called_once_with(
-        query_texts=["query"], n_results=2, where={"user_id": 3}  # n = min(limit, count)
-    )
-
-
-def test_get_collection_is_cached(monkeypatch):
-    monkeypatch.setattr(emb, "_collection", None)
-    fake_col = object()
-    fake_client = MagicMock()
-    fake_client.get_or_create_collection.return_value = fake_col
-    monkeypatch.setattr(emb.chromadb, "PersistentClient", lambda **k: fake_client)
-    monkeypatch.setattr(emb, "DefaultEmbeddingFunction", lambda: None)
-
-    first = emb._get_collection()
-    second = emb._get_collection()
-    assert first is fake_col and second is fake_col
-    fake_client.get_or_create_collection.assert_called_once()  # built once, then cached
+    assert embedded == []  # short-circuits before embedding the query

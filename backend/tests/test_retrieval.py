@@ -1,6 +1,6 @@
 """services.retrieval.hybrid_search — 0.7 semantic + 0.3 BM25 fusion.
 
-`search_similar` (the Chroma call) is stubbed; BM25 runs for real over content.
+`search_similar` (the vector-store call) is stubbed; BM25 runs for real over content.
 """
 from datetime import datetime
 

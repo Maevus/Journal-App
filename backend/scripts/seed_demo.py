@@ -1,11 +1,14 @@
 """
 Seed a self-contained demo database for showcasing the app.
 
-Builds `demo_journal.db` + `demo_chroma_db` (both gitignored) with ~60
-hand-crafted entries spanning the last ~6 months across all three sources,
-with mood scores that match each entry's tone — so the chart, source filter,
-search, day drill-down, and synthesis all have something real-looking to show.
-The personal `journal.db` / `chroma_db` are never touched.
+Builds `demo_journal.db` (gitignored) with ~60 hand-crafted entries spanning the
+last ~6 months across all three sources, with mood scores that match each entry's
+tone — so the chart, source filter, day drill-down, and synthesis all have
+something real-looking to show. The personal `journal.db` is never touched.
+
+Note: semantic search is dormant on the SQLite demo — the vector store is
+pgvector (Postgres-only), so `embed_and_store` no-ops here. Search returns when
+the demo moves onto Postgres as a signed-out seed user.
 
 Timestamps are relative to "now", so the demo always looks fresh no matter
 when it is rebuilt. Keep external_ids are fake (`demo-keep-…`) — the
@@ -17,11 +20,10 @@ Usage (from backend/):
 
     APP_MODE=demo uvicorn main:app            # serve the demo stack
 
-APP_MODE=demo derives the demo db + chroma dir and turns Keep sync off in one
-switch, so real Keep notes can never sync into the demo db. See backend/config.py.
+APP_MODE=demo derives the demo db and turns Keep sync off in one switch, so real
+Keep notes can never sync into the demo db. See backend/config.py.
 """
 import os
-import shutil
 import sys
 from datetime import timedelta
 from pathlib import Path
@@ -31,11 +33,9 @@ os.chdir(BACKEND_DIR)
 sys.path.insert(0, str(BACKEND_DIR))
 
 DEMO_DB = "demo_journal.db"
-DEMO_CHROMA = "demo_chroma_db"
 
 # Must be set before importing models/services — config reads env at import time.
-# APP_MODE=demo derives the demo db + chroma dir (and sync-off) in one switch;
-# DEMO_DB / DEMO_CHROMA above mirror those derived paths for the wipe below.
+# APP_MODE=demo derives the demo db (and Keep-sync-off) in one switch.
 os.environ["APP_MODE"] = "demo"
 
 from sqlmodel import Session, SQLModel  # noqa: E402
@@ -281,8 +281,6 @@ def main() -> None:
     db_path = Path(DEMO_DB)
     if db_path.exists():
         db_path.unlink()
-    if Path(DEMO_CHROMA).exists():
-        shutil.rmtree(DEMO_CHROMA)
 
     SQLModel.metadata.create_all(engine)
     # The app self-migrates on startup (main._run_migrations → alembic upgrade
@@ -330,6 +328,8 @@ def main() -> None:
             session.add(entry)
             session.commit()
             session.refresh(entry)
+            # No-ops on the SQLite demo (pgvector is Postgres-only). Semantic
+            # search returns when the demo moves onto Postgres as a seed user.
             embed_and_store(entry.id, content, user_id=demo_user.id)
             counts[source] = counts.get(source, 0) + 1
 
@@ -337,7 +337,6 @@ def main() -> None:
     print(f"Seeded {sum(counts.values())} entries over the last {span_days} days into {DEMO_DB}:")
     for source, n in sorted(counts.items()):
         print(f"  {source:12s} {n}")
-    print(f"Embeddings stored in {DEMO_CHROMA}/")
     print("\nRun the demo backend with:\n  APP_MODE=demo uvicorn main:app")
 
 

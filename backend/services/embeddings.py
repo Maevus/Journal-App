@@ -1,66 +1,99 @@
-"""
-Chroma vector store: embed entries and run similarity search.
-Uses chromadb's built-in ONNX embedding function (no extra deps needed).
+"""Vector store backed by Postgres + pgvector.
+
+Embeddings are generated locally with fastembed (all-MiniLM-L6-v2, 384-d, ONNX —
+no torch) and stored in the Postgres-only `entry_embeddings` table (created by the
+Alembic migration, kept out of SQLModel.metadata so SQLite never tries to build a
+`vector` column). Off Postgres — the SQLite unit suite and the interim SQLite demo
+— the store degrades to a no-op / empty result: those paths either mock at the
+retrieval boundary or simply have no semantic layer yet (the demo regains it when
+it moves onto Postgres as a seed user).
+
+The public interface is unchanged from the Chroma version — `embed_and_store` +
+`search_similar` with the same signatures and the same `[(entry_id, similarity)]`
+return — so `retrieval.hybrid_search` and `ingestion` need no changes.
 """
 import logging
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
-import chromadb
-from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+from sqlalchemy import text
 
-from config import CHROMA_PERSIST_DIR
+from models.journal import engine
 
 logger = logging.getLogger(__name__)
 
-COLLECTION_NAME = "journal_entries"
-
-_collection = None
-
-
-def _get_collection():
-    global _collection
-    if _collection is None:
-        client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
-        _collection = client.get_or_create_collection(
-            name=COLLECTION_NAME,
-            embedding_function=DefaultEmbeddingFunction(),
-        )
-    return _collection
+# 384-d, matches the model Chroma's DefaultEmbeddingFunction used, so semantics
+# carry over. The model is downloaded/cached on first use (bake it into the
+# deploy image to avoid a cold-start fetch).
+_MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+_embedder = None
 
 
-def embed_and_store(entry_id: int, content: str, *, user_id: Optional[int]) -> None:
-    """Embed one entry, stamped with its owner so the ANN query can filter by user.
+def _on_postgres() -> bool:
+    return engine.dialect.name == "postgresql"
 
-    `user_id` is required but may be explicitly None (the user-less startup sync
-    paths): callers must always state ownership, even to say "unowned". Chroma
-    metadata can't hold NULL, so unowned vectors carry no user_id key at all —
-    an absent key matches no user's filter, the vector-store spelling of SQL's
-    invisible `user_id NULL` rows (ADR 0003). scripts/backfill_owner.py stamps
-    both stores.
+
+def _get_embedder():
+    global _embedder
+    if _embedder is None:
+        from fastembed import TextEmbedding
+
+        _embedder = TextEmbedding(_MODEL_NAME)
+    return _embedder
+
+
+def _embed(content: str) -> List[float]:
+    vec = next(iter(_get_embedder().embed([content])))
+    return [float(x) for x in vec]  # numpy float32 → JSON/pgvector-friendly floats
+
+
+def _to_pgvector(vec: List[float]) -> str:
+    """pgvector's text input format: '[v1,v2,...]'. Bound as a string and cast
+    `::vector` in SQL, so no per-connection type registration is needed."""
+    return "[" + ",".join(repr(x) for x in vec) + "]"
+
+
+def embed_and_store(entry_id: int, content: str, *, user_id: int) -> None:
+    """Embed one entry and upsert it into the vector store, owner-stamped.
+
+    `user_id` is required and non-null — every entry has an owner since the
+    Postgres migration, so there are no unowned vectors. No-ops off Postgres
+    (SQLite tests / the interim demo have no pgvector).
     """
-    kwargs = {"documents": [content], "ids": [str(entry_id)]}
-    if user_id is not None:
-        kwargs["metadatas"] = [{"user_id": user_id}]
-    _get_collection().upsert(**kwargs)
+    if not _on_postgres():
+        return
+    emb = _to_pgvector(_embed(content))
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO entry_embeddings (entry_id, user_id, embedding) "
+                "VALUES (:eid, :uid, (:emb)::vector) "
+                "ON CONFLICT (entry_id) DO UPDATE SET "
+                "user_id = EXCLUDED.user_id, embedding = EXCLUDED.embedding"
+            ),
+            {"eid": entry_id, "uid": user_id, "emb": emb},
+        )
 
 
 def search_similar(query: str, limit: int = 10, *, user_id: int) -> List[Tuple[int, float]]:
-    """Return [(entry_id, similarity_score)] of `user_id`'s entries, most similar first.
+    """Return [(entry_id, similarity)] of `user_id`'s entries, most similar first.
 
-    `user_id` is required and keyword-only for the same reasons as hybrid_search:
-    an unscoped ANN query must be inexpressible. The `where` filter also spends
-    the whole candidate pool on this user's vectors instead of ranking everyone's.
+    Similarity is cosine (`1 - (embedding <=> q)`, pgvector's cosine distance),
+    ~[0, 1] over the normalized MiniLM space. `user_id` is required and
+    keyword-only: an unscoped ANN query over a journal must be inexpressible, and
+    a transposed arg can't bind to the adjacent int `limit` (ADR 0003). The
+    `WHERE user_id` filter is defense in depth — SQL stays the isolation boundary
+    of record in `hybrid_search`. Empty off Postgres.
     """
-    collection = _get_collection()
-    count = collection.count()
-    if count == 0:
+    if not _on_postgres():
         return []
-
-    n = min(limit, count)
-    results = collection.query(query_texts=[query], n_results=n, where={"user_id": user_id})
-
-    ids = results["ids"][0]
-    distances = results["distances"][0]
-
-    # Chroma returns L2 distance; convert to a 0-1 similarity score
-    return [(int(doc_id), 1.0 / (1.0 + dist)) for doc_id, dist in zip(ids, distances)]
+    q = _to_pgvector(_embed(query))
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT entry_id, 1 - (embedding <=> (:q)::vector) AS similarity "
+                "FROM entry_embeddings WHERE user_id = :uid "
+                "ORDER BY embedding <=> (:q)::vector LIMIT :n"
+            ),
+            {"q": q, "uid": user_id, "n": limit},
+        ).all()
+    return [(int(eid), float(sim)) for eid, sim in rows]

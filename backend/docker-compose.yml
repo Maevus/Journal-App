@@ -7,7 +7,11 @@
 #   docker compose down -v       # stop and wipe the data volume
 services:
   db:
-    image: postgres:18  # major tag → latest 18.x; matches the likely managed-host major
+    # Postgres 18 + pgvector (bundles pgvector 0.8.5). Pin the -trixie variant to
+    # match the base OS (glibc) the data volume was initialised on — the plain
+    # tag is bookworm, and mixing glibc collation versions on one volume warns and
+    # risks collation-sensitive index corruption.
+    image: pgvector/pgvector:pg18-trixie
     container_name: journal-postgres
     environment:
       POSTGRES_USER: journal

@@ -1,4 +1,4 @@
-"""Hybrid retrieval: semantic (Chroma) + BM25 keyword, fused 70/30, with an
+"""Hybrid retrieval: semantic (pgvector) + BM25 keyword, fused 70/30, with an
 optional timestamp window so time-scoped questions ("energy in May") only
 retrieve from the relevant date range.
 
@@ -28,8 +28,9 @@ logger = logging.getLogger(__name__)
 # dropped anyway by the fusion, so this is harmless when the window is large.
 # TODO: this fixed cap still under-covers windows holding >100 entries (in-window
 # entries beyond the global semantic top-100 fall back to BM25-only). The deep fix
-# is storing `timestamp` as Chroma metadata and filtering the ANN query itself,
-# which needs `embed_and_store` to persist metadata + a one-off re-embed.
+# is now cheap on pgvector: add `timestamp` to `entry_embeddings` and push the
+# window into the ANN query's WHERE (a plain SQL predicate — no Chroma metadata
+# dance), so search_similar itself returns only in-window hits.
 _WINDOWED_SEMANTIC_POOL = 100
 
 # A small, fast model is plenty for date extraction + follow-up condensation.
@@ -55,8 +56,8 @@ def hybrid_search(
     say whose, so a forgotten argument fails loudly instead of searching everyone,
     and a transposed one can't bind to the adjacent int `limit` (ADR 0003). The
     SQL candidate set is the isolation boundary — semantic hits on other users'
-    rows are dropped at fusion. The Chroma query is user-filtered too (slice 4),
-    but as defense in depth: correctness never rests on vector metadata.
+    rows are dropped at fusion. The pgvector query is user-filtered too (WHERE
+    user_id), but as defense in depth: correctness never rests on the vector store.
 
     `start`/`end` (naive UTC, half-open `[start, end)`) restrict the candidate
     set to that window before fusion, so a time-scoped question can't be crowded
@@ -71,8 +72,8 @@ def hybrid_search(
     if not entries:
         return []
 
-    # --- Semantic search (Chroma) ---
-    # The ANN query is already user-filtered (vector metadata); the fusion below
+    # --- Semantic search (pgvector) ---
+    # The ANN query is already user-filtered (WHERE user_id); the fusion below
     # additionally keeps only ids in `entries`, so out-of-window semantic hits
     # are discarded and SQL stays the isolation boundary of record.
     windowed = start is not None or end is not None

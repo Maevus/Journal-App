@@ -7,12 +7,11 @@ see. Run this once after logging in, from `backend/`:
 
     .venv/bin/python scripts/backfill_owner.py you@gmail.com
 
-Idempotent: already-owned rows are never touched, and the Chroma pass just
-re-stamps the same metadata. Both stores are covered: after assigning SQL
-rows, every owned entry's vector gets a `user_id` metadata stamp, because the
-filtered ANN query (slice 4) cannot see vectors without one. The canonical,
-final backfill happens at the SQLite→Postgres migration; this script just
-keeps a live single-user DB usable in the meantime.
+Idempotent: already-owned rows are never touched. The canonical, final backfill
+happens at the SQLite→Postgres migration; this script just keeps a live
+single-user DB usable in the meantime. (Vector ownership is no longer stamped
+here — since the pgvector move, `entry_embeddings.user_id` is set at embed time
+and vectors are rebuilt by scripts/embed_backfill.py.)
 """
 import sys
 from pathlib import Path
@@ -27,30 +26,6 @@ from sqlmodel import Session, select  # noqa: E402
 
 from models.journal import JournalEntry, engine  # noqa: E402
 from models.user import User  # noqa: E402
-
-
-def backfill_chroma(session: Session) -> None:
-    """Stamp every owned entry's vector with its owner, from SQL (the source of
-    truth for ownership). Covers vectors embedded before slice 4 — and rows a
-    previous run of this script assigned while Chroma wasn't backfilled yet.
-    Only ids present in both stores are touched; update() rewrites metadata
-    without re-embedding."""
-    from services.embeddings import _get_collection
-
-    owner_by_id = {
-        str(e.id): e.user_id
-        for e in session.exec(
-            select(JournalEntry).where(JournalEntry.user_id != None)  # noqa: E711
-        ).all()
-    }
-    collection = _get_collection()
-    existing = set(collection.get(include=[])["ids"])  # ids only — skip embeddings/documents
-    ids = sorted(owner_by_id.keys() & existing, key=int)
-    if not ids:
-        print("Chroma: no vectors to stamp")
-        return
-    collection.update(ids=ids, metadatas=[{"user_id": owner_by_id[i]} for i in ids])
-    print(f"Chroma: stamped user_id onto {len(ids)} vectors")
 
 
 def main(email: str) -> None:
@@ -69,7 +44,6 @@ def main(email: str) -> None:
             session.add(entry)
         session.commit()
         print(f"Backfilled {len(unowned)} unowned entries → {email} (user id {user.id})")
-        backfill_chroma(session)
 
 
 if __name__ == "__main__":

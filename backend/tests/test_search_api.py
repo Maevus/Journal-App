@@ -1,6 +1,6 @@
-"""POST /search — hybrid 70% semantic (Chroma) + 30% BM25 fusion.
+"""POST /search — hybrid 70% semantic (pgvector) + 30% BM25 fusion.
 
-`search_similar` (the Chroma call) is stubbed so the semantic signal is
+`search_similar` (the vector-store call) is stubbed so the semantic signal is
 controlled; BM25 is computed for real from entry content. The fusion now lives
 in `services.retrieval`, so the stub is applied there.
 """
@@ -10,7 +10,7 @@ RESULT_KEYS = {"id", "content", "source", "timestamp", "similarity_score", "exte
 
 
 def test_empty_db_returns_no_results(client, me):
-    # Short-circuits before touching Chroma.
+    # Short-circuits before touching the vector store.
     assert client.post("/search", json={"query": "anything", "limit": 5}).json() == {"results": []}
 
 

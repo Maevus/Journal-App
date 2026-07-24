@@ -491,3 +491,39 @@ deploy. Target is local Docker Postgres with a portable `DATABASE_URL`.
   alarm). Engine `connect_args` branch on the URL scheme.
 - **Demo** (SQLite, built by `create_all`) now `alembic stamp head`s after
   seeding so the startup upgrade is a clean no-op instead of re-CREATEing tables.
+
+## Chroma → pgvector (2026-07-24)
+
+Moved the vector store out of Chroma (a local `chroma_db/` directory — the
+backend's only stateful-filesystem dependency) into Postgres via **pgvector**.
+Prompted by hosting: it makes the backend storage-stateless (scale-to-zero
+container hosts like Cloud Run, horizontal scale on a shared store) and gives the
+vectors a `user_id` column ready for RLS. Fits the confirmed shape — **one
+deployment**, the demo as a signed-out seed user in the same Postgres.
+
+- **Clean 2-function interface saved the day.** The store is behind
+  `embed_and_store` + `search_similar`; preserving both signatures meant
+  `retrieval.hybrid_search` (does `dict(search_similar(...))`), `ingestion`, and
+  the search/retrieval/isolation tests (mock at that boundary) needed **no change**.
+- **Embeddings**: `fastembed` (ONNX, no torch) with `all-MiniLM-L6-v2` (384-d,
+  the model Chroma's default used) — *lighter* than chromadb, which is dropped.
+  All 980 entries **re-embedded** locally (`scripts/embed_backfill.py`, ~37s, free)
+  rather than porting Chroma's vectors — simpler, one consistent space. Query
+  ranking checks out: "climbing" still returns entry 690 top.
+- **Storage**: a **Postgres-only `entry_embeddings`** table (`entry_id` PK/FK
+  cascade, `user_id` NOT NULL, `embedding vector(384)`, HNSW cosine index),
+  created by a **hand-written** Alembic migration (autogenerate emits neither the
+  extension nor HNSW) and kept **out of `SQLModel.metadata`** so SQLite never
+  tries to build a `vector` column. `embeddings.py` talks to it via parameterized
+  SQL (bind the vector as `'[…]'::vector` — no per-connection type registration).
+- **Graceful degrade off-Postgres**: `search_similar` → `[]`, `embed_and_store`
+  → no-op. Keeps the SQLite unit suite green and the interim SQLite demo running
+  (its semantic search is dormant until the demo moves onto Postgres — the agreed
+  follow-up). Real vector behavior is `TEST_DATABASE_URL`-gated
+  (`test_embeddings_integration.py`); the drift test is unaffected (table not in
+  metadata).
+- **Docker image**: `postgres:18` → **`pgvector/pgvector:pg18-trixie`**. The
+  `-trixie` variant is deliberate — the plain tag is bookworm (glibc 2.36) and the
+  data volume was initialised on trixie (glibc 2.41); mixing glibc collation
+  versions on one volume warns and risks collation-sensitive index corruption.
+  Supabase ships pgvector, so prod needs no image change.

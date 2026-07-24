@@ -12,12 +12,12 @@ Full-stack personal journal analytics app: React SPA + FastAPI backend.
   models/journal.py         — SQLModel schema: JournalEntry + engine + get_session
   services/
     llm_client.py           — Anthropic wrapper: async streaming, structured output, retry, cost logging. DEFAULT_MODEL = claude-opus-4-8 ($5/$25 per 1M); model + pricing become per-user config once users bring their own key
-    embeddings.py           — Chroma vector store: embed_and_store, search_similar
+    embeddings.py           — pgvector store: embed_and_store, search_similar (fastembed MiniLM-384; Postgres-only, no-ops off PG)
     ingestion.py            — Hash-deduplicated ingest + background mood scoring
   routers/
     ingest.py               — POST /ingest
     synthesis.py            — GET /stream/synthesis  (SSE); in-memory LRU cache keyed on the rendered prompt, so identical requests skip the LLM call
-    search.py               — POST /search  (hybrid BM25 + Chroma)
+    search.py               — POST /search  (hybrid BM25 + pgvector)
     trends.py               — GET /trends
   prompts/synthesis_v1.yaml — Versioned system + user prompt template
 
@@ -44,15 +44,15 @@ uvicorn main:app --reload
 
 **Imports are absolute from `backend/`** — always run `uvicorn` (and `pytest`) from within `backend/`, not the repo root.
 
-Tests live in `backend/tests/` (pytest + pytest-asyncio + pytest-cov, `asyncio_mode=auto` via `pytest.ini`; coverage prints on every run). They use an in-memory SQLite DB and mock the external boundaries (Chroma, the Anthropic client, gkeepapi, the filesystem), so they never touch `journal.db`, Chroma, or the network. Coverage is ~88%: the ingest dedup engine, date parsing, OCR helpers, the Alembic migration/drift guard (`test_migrations.py`), mood scoring, all five router endpoints (via `TestClient` with `get_session` overridden — see the `client`/`add_entry` fixtures in `conftest.py`), and the LLM/embeddings wrappers. Lowest-covered remainder: `main.py` lifespan and the iCloud `brctl` download path.
+Tests live in `backend/tests/` (pytest + pytest-asyncio + pytest-cov, `asyncio_mode=auto` via `pytest.ini`; coverage prints on every run). They use an in-memory SQLite DB and mock the external boundaries (the Anthropic client, gkeepapi, the filesystem), so they never touch `journal.db` or the network. The pgvector store is Postgres-only, so `embed_and_store`/`search_similar` no-op off Postgres; real vector behavior is covered by `test_embeddings_integration.py`, gated on `TEST_DATABASE_URL`. Coverage is ~88%: the ingest dedup engine, date parsing, OCR helpers, the Alembic migration/drift guard (`test_migrations.py`), mood scoring, all five router endpoints (via `TestClient` with `get_session` overridden — see the `client`/`add_entry` fixtures in `conftest.py`), and the LLM/embeddings wrappers. Lowest-covered remainder: `main.py` lifespan and the iCloud `brctl` download path.
 
-Database: **Postgres** in real mode (ADR 0003 — the multi-user engine), SQLite for tests + demo. `engine` and `get_session` live in `models/journal.py`; the engine's connect args branch on the URL scheme (`check_same_thread`/`pool_pre_ping`). Point the app at Postgres via `DATABASE_URL=postgresql+psycopg://…` (see `.env.example`); a local server is `docker compose up -d db` (`backend/docker-compose.yml`, `postgres:18`). **Schema is managed by Alembic** (`backend/alembic/`) — `alembic upgrade head`, and the app also self-migrates on startup (`main._run_migrations`). One-time SQLite→Postgres data copy: `scripts/migrate_sqlite_to_pg.py` (preserves ids so Chroma stays aligned). Deferred to the hardening phase: RLS + KMS envelope.
+Database: **Postgres** in real mode (ADR 0003 — the multi-user engine), SQLite for tests + demo. `engine` and `get_session` live in `models/journal.py`; the engine's connect args branch on the URL scheme (`check_same_thread`/`pool_pre_ping`). Point the app at Postgres via `DATABASE_URL=postgresql+psycopg://…` (see `.env.example`); a local server is `docker compose up -d db` (`backend/docker-compose.yml`, `pgvector/pgvector:pg18-trixie` — Postgres 18 + pgvector). **Schema is managed by Alembic** (`backend/alembic/`) — `alembic upgrade head`, and the app also self-migrates on startup (`main._run_migrations`). One-time SQLite→Postgres data copy: `scripts/migrate_sqlite_to_pg.py` (preserves ids); embeddings are (re)built by `scripts/embed_backfill.py` into the pgvector `entry_embeddings` table. Deferred to the hardening phase: RLS + KMS envelope.
 
 SSE format: each token is JSON-encoded (`json.dumps(token)`) so newlines survive the `data: …\n\n` SSE frame. The frontend `JSON.parse`s each event.
 
 Mood scoring is a FastAPI `BackgroundTask` — it fires after ingest returns and calls `services/llm_client.py:structured_output`. Failures are silently swallowed.
 
-**Demo mode**: `python scripts/seed_demo.py` builds a self-contained showcase DB (`demo_journal.db` + `demo_chroma_db/`, both gitignored) with ~65 crafted entries across all three sources and a deliberate mood arc. Serve it without touching the real journal via `APP_MODE=demo uvicorn main:app`. The single `APP_MODE` switch (`backend/config.py`) derives the demo db, Chroma dir, and Keep-sync-off together, so the demo can't accidentally ingest real Keep notes; `DATABASE_URL` / `CHROMA_PERSIST_DIR` / `SYNC_ON_STARTUP` still override individual pieces. **Don't re-pin those three in `.env`** — that silently neutralises `APP_MODE=demo`.
+**Demo mode**: `python scripts/seed_demo.py` builds a self-contained showcase DB (`demo_journal.db`, gitignored) with ~65 crafted entries across all three sources and a deliberate mood arc. Serve it without touching the real journal via `APP_MODE=demo uvicorn main:app`. The single `APP_MODE` switch (`backend/config.py`) derives the demo db and Keep-sync-off together, so the demo can't accidentally ingest real Keep notes; `DATABASE_URL` / `SYNC_ON_STARTUP` still override individual pieces. **Don't re-pin those in `.env`** — that silently neutralises `APP_MODE=demo`. Semantic search is dormant on the SQLite demo (pgvector is Postgres-only); it returns when the demo becomes a signed-out seed user on Postgres.
 
 **Restarting both servers**: `scripts/dev.sh {demo|real}` (re-runnable; kills the ports first, then starts backend :8000 + frontend :5173). `scripts/dev.sh demo --api-only` skips Vite; `scripts/dev.sh stop` kills both. Logs go to `/tmp/journal-{backend,frontend}.log`.
 

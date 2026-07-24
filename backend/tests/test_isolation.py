@@ -264,9 +264,9 @@ def test_hybrid_search_is_scoped_to_the_user(session, monkeypatch):
 
 
 def test_retrieval_scopes_the_vector_query_itself(session, monkeypatch):
-    """Defense in depth (slice 4): hybrid_search must pass user_id down into the
-    Chroma query, not just drop foreign ids at fusion — so the vector store
-    enforces isolation too and the semantic pool isn't wasted on other users."""
+    """Defense in depth: hybrid_search must pass user_id down into the pgvector
+    query, not just drop foreign ids at fusion — so the vector store enforces
+    isolation too and the semantic pool isn't wasted on other users."""
     import services.retrieval as retrieval
 
     ingest_entries(["climbing rocks"], "text", session, user_id=2)

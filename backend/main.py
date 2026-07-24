@@ -140,10 +140,9 @@ async def lifespan(app: FastAPI):
     _configure_logging()  # before the first app log line below
     # Launch banner so the operator sees at a glance which DB is live.
     logger.info(
-        "APP_MODE=%s → db=%s chroma=%s sync=%s",
+        "APP_MODE=%s → db=%s sync=%s",
         config.APP_MODE,
         config.DATABASE_URL,
-        config.CHROMA_PERSIST_DIR,
         config.SYNC_ON_STARTUP,
     )
     _run_migrations()  # bring schema to head (Alembic; replaces create_all + ensure_schema)

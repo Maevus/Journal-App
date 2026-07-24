@@ -1,7 +1,8 @@
 """Shared test fixtures.
 
 Tests run against an in-memory SQLite DB and never touch the real journal.db or
-Chroma — `embed_and_store` (the vector-store write) is stubbed out for every test.
+the pgvector store — `embed_and_store` (the vector-store write) is stubbed out for
+every test (and no-ops off Postgres anyway).
 """
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -51,7 +52,7 @@ def session():
 
 @pytest.fixture(autouse=True)
 def _stub_embeddings(monkeypatch):
-    """ingest_entries writes to Chroma via embed_and_store; no-op it in tests."""
+    """ingest_entries writes to the vector store via embed_and_store; no-op it."""
     monkeypatch.setattr(ingestion, "embed_and_store", lambda *a, **k: None)
 
 

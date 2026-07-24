@@ -1,13 +1,14 @@
 """
 Central runtime config.
 
-A single APP_MODE switch derives the database, vector store, and Keep-sync
-defaults together, so they can't drift apart — the dangerous case being a demo
-DB selected while Keep sync is left on, which would pull real notes into the
-demo. One switch can't be half-set.
+A single APP_MODE switch derives the database and Keep-sync defaults together, so
+they can't drift apart — the dangerous case being a demo DB selected while Keep
+sync is left on, which would pull real notes into the demo. One switch can't be
+half-set. (Embeddings live in Postgres via pgvector since the Chroma move, so
+there's no separate vector-store path to derive.)
 
-  APP_MODE=real  (default) → journal.db      + chroma_db      + sync on
-  APP_MODE=demo            → demo_journal.db + demo_chroma_db + sync off
+  APP_MODE=real  (default) → journal.db      + sync on
+  APP_MODE=demo            → demo_journal.db + sync off
 
 Any individual var still wins when set explicitly, so every combination is
 still reachable:
@@ -31,10 +32,8 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite:///./demo_journal.db" if IS_DEMO else "sqlite:///./journal.db",
 )
-CHROMA_PERSIST_DIR = os.getenv(
-    "CHROMA_PERSIST_DIR",
-    "./demo_chroma_db" if IS_DEMO else "./chroma_db",
-)
+# Embeddings live in Postgres (pgvector) since the Chroma→pgvector move — no
+# separate vector-store directory to configure.
 # Demo must never pull real Keep notes, so sync defaults off in demo mode.
 SYNC_ON_STARTUP = os.getenv(
     "SYNC_ON_STARTUP", "0" if IS_DEMO else "1"
