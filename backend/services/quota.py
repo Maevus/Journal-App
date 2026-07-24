@@ -55,11 +55,16 @@ def _utc_day_start() -> datetime:
     return utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
 
 
-def _tier_budget() -> float:
-    """The keyless daily budget for the current mode — the value the gate
-    enforces for a user without their own key (demo mode vs the free tier).
-    Shared by check_quota and usage_snapshot so the two can't disagree."""
-    return config.DEMO_DAILY_USD if config.IS_DEMO else config.FREE_TIER_DAILY_USD
+def _tier_budget(session: Session, user_id: int) -> float:
+    """The keyless daily budget for `user_id` — the demo user gets the demo
+    budget, everyone else the free tier. Per-user (not a global mode) since one
+    app now serves the demo visitor and real users at once. Shared by check_quota
+    and usage_snapshot so the two can't disagree."""
+    from services.auth import is_demo_user_id  # local import: avoids an import cycle
+
+    if is_demo_user_id(session, user_id):
+        return config.DEMO_DAILY_USD
+    return config.FREE_TIER_DAILY_USD
 
 
 def _user_spend_since(session: Session, *, user_id: int, since: datetime) -> float:
@@ -120,11 +125,10 @@ def check_quota(*, user_id: Optional[int], on_own_key: Optional[bool] = None) ->
 
             if user_id is None:
                 return
-            # In demo mode every visitor IS the seeded demo user, so the mode,
-            # not the user row, decides the budget. Per-user tiers arrive with
-            # BYO keys (F4); until then this pair of config knobs is the whole
-            # budget model.
-            budget = _tier_budget()
+            # Keyless budget for this user: the demo user gets the demo budget,
+            # everyone else the free tier (per-user, resolved from the same
+            # session). A key-holder was already exempted above.
+            budget = _tier_budget(session, user_id)
             spent = _user_spend_since(session, user_id=user_id, since=day_start)
         if spent >= budget:
             raise QuotaExceededError(
@@ -165,6 +169,7 @@ def usage_snapshot(*, user_id: int, days: int = 30) -> UsageSnapshot:
     window_start = day_start - timedelta(days=days - 1)
     with Session(engine) as session:
         on_own_key = key_store.has_user_key(session, user_id=user_id)
+        keyless_budget = _tier_budget(session, user_id)  # resolved while the session is live
         spent_today = _user_spend_since(session, user_id=user_id, since=day_start)
         calls_today = session.exec(
             select(func.count(LLMUsage.id))
@@ -190,7 +195,7 @@ def usage_snapshot(*, user_id: int, days: int = 30) -> UsageSnapshot:
         spent, calls = by_date.get(iso, (0.0, 0))
         daily.append({"date": iso, "spent_usd": round(spent, 6), "calls": calls})
 
-    budget = None if on_own_key else _tier_budget()
+    budget = None if on_own_key else keyless_budget
     remaining = None if budget is None else round(max(0.0, budget - spent_today), 6)
     return UsageSnapshot(
         on_own_key=on_own_key,

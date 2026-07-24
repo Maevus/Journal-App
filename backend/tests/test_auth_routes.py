@@ -84,16 +84,30 @@ def test_me_returns_user_when_logged_in(client, monkeypatch):
     assert resp.json()["demo"] is False  # real mode — key management available
 
 
-def test_me_carries_the_demo_flag(client, monkeypatch):
-    """In demo mode /auth/me says so — the frontend hides key management
-    (shared account) instead of surfacing a 403 on save."""
+def test_me_reports_demo_for_a_signed_out_public_demo_visitor(client, monkeypatch):
+    """Under PUBLIC_DEMO a signed-out visitor resolves to the demo user, and
+    /auth/me says demo:true — the SPA hides key management and shows the sign-in
+    CTA instead of surfacing a 403 on save."""
     import config
 
+    monkeypatch.setattr(config, "PUBLIC_DEMO", True)
+    body = client.get("/auth/me").json()  # no session cookie
+    assert body["demo"] is True
+    assert body["email"] == "demo@journal.local"
+
+
+def test_me_reports_not_demo_for_a_logged_in_user(client, monkeypatch):
+    """A real logged-in user is themselves, not the demo — even with PUBLIC_DEMO
+    on, a valid session always wins."""
+    import config
+
+    monkeypatch.setattr(config, "PUBLIC_DEMO", True)
     _fake_google_login(monkeypatch, email="me@example.com")
     client.get("/auth/callback", follow_redirects=False)
-    monkeypatch.setattr(config, "IS_DEMO", True)
 
-    assert client.get("/auth/me").json()["demo"] is True
+    body = client.get("/auth/me").json()
+    assert body["demo"] is False
+    assert body["email"] == "me@example.com"
 
 
 def test_me_401_without_cookie(client):

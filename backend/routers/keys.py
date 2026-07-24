@@ -13,7 +13,7 @@ import config
 from models.journal import get_session
 from models.user import User
 from services import key_store
-from services.auth import get_current_user
+from services.auth import get_current_user, is_demo_user
 from services.llm_client import key_is_valid
 
 router = APIRouter()
@@ -42,11 +42,11 @@ async def set_key(
     db: Session = Depends(get_session),
 ):
     """Validate a BYO key against Anthropic, then store it encrypted."""
-    if config.IS_DEMO:
-        # Demo logs every visitor into one shared account — a visitor must not
-        # set a key on it, or every visitor's calls would run on that key.
+    if is_demo_user(user):
+        # The demo account is shared across every signed-out visitor — one must
+        # not set a key on it, or everyone's calls would run on that key.
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Key management is disabled in demo mode"
+            status.HTTP_403_FORBIDDEN, "Key management is disabled for the demo account"
         )
     if not config.APP_ENCRYPTION_KEY:
         raise HTTPException(

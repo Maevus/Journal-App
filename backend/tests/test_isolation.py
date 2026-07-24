@@ -88,17 +88,19 @@ def test_demo_mode_auto_logs_in_demo_user(client, monkeypatch):
     assert resp.json()["email"] == "demo@journal.local"
 
 
-def test_demo_mode_ingest_stamps_the_demo_user(client, monkeypatch):
+def test_demo_user_cannot_ingest(client, monkeypatch):
+    """The demo is a read-only showcase: a signed-out visitor (resolved to the
+    demo user under PUBLIC_DEMO) is refused writes to the shared demo journal, so
+    one visitor can't pollute what the next one sees."""
     import config
 
-    monkeypatch.setattr(config, "IS_DEMO", True)
+    monkeypatch.setattr(config, "PUBLIC_DEMO", True)
 
     resp = client.post("/ingest", json={"entries": ["hi"], "source": "text"})
 
-    assert resp.status_code == 200
+    assert resp.status_code == 403
     with Session(client.engine) as s:
-        [row] = s.exec(select(JournalEntry)).all()
-        assert row.user_id is not None  # owned by the auto-created demo user
+        assert s.exec(select(JournalEntry)).all() == []  # nothing written
 
 
 def test_sync_owner_resolves_by_google_email(session, monkeypatch):

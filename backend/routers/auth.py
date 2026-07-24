@@ -34,6 +34,7 @@ from services.auth import (
     create_session,
     get_current_user,
     get_or_create_user,
+    is_demo_user,
     revoke_session,
 )
 
@@ -102,11 +103,12 @@ async def callback(request: Request, db: Session = Depends(get_session)):
 def me(user: User = Depends(get_current_user)):
     """Who am I? The SPA calls this on load to decide login state.
 
-    `demo` rides along so the frontend knows it's talking to the shared demo
-    account — the mode was previously invisible to the SPA, which showed the
-    BYO key form in demo only for POST /keys to 403 on save.
+    `demo` rides along so the SPA knows this is the shared demo account (a
+    signed-out visitor under PUBLIC_DEMO, or anyone under APP_MODE=demo) — it hides
+    key management and shows the "sign in to start your own" CTA. Now a per-user
+    fact, since one instance serves both the demo visitor and real logged-in users.
     """
-    return {"id": user.id, "email": user.email, "demo": config.IS_DEMO}
+    return {"id": user.id, "email": user.email, "demo": is_demo_user(user)}
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

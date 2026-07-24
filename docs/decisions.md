@@ -527,3 +527,36 @@ deployment**, the demo as a signed-out seed user in the same Postgres.
   data volume was initialised on trixie (glibc 2.41); mixing glibc collation
   versions on one volume warns and risks collation-sensitive index corruption.
   Supabase ships pgvector, so prod needs no image change.
+
+## Demo as the signed-out state of the one app (2026-07-24)
+
+The hosting shape: **one deployment** where a visitor who lands without an account
+sees a read-only demo, and signing in gives them their own journal — same app,
+same Postgres. So demo-ness moved from a **global switch** (`APP_MODE=demo`
+resolving *every* request to the demo user) to a **per-user fact**, because one
+instance now serves the demo visitor and real logged-in users simultaneously.
+
+- **Per-user, not global.** `services/auth.py:is_demo_user(user)` (anchored on the
+  stable `google_sub == "demo"`) + a lazily-cached `is_demo_user_id(user_id)`
+  replace the ~5 `config.IS_DEMO` checks (quota budget, model resolution, `/keys`
+  403, `/auth/me`, and the new `/ingest` guard). The cache is a per-process
+  constant in prod; tests reset it (a `conftest` autouse fixture) since each uses
+  a fresh DB.
+- **`PUBLIC_DEMO` flag.** `get_current_user` now resolves: valid session → the real
+  user (a login always wins); else demo user when `IS_DEMO or PUBLIC_DEMO`; else
+  401. Off (default) keeps the private instance's logged-out → 401. `APP_MODE=demo`
+  is retained (a standalone SQLite demo — everyone is the demo user), and the
+  per-user checks are simply true for everyone there, so nothing regresses.
+- **Read-only demo.** The demo visitor can chat + search (POST-but-read, bounded by
+  `DEMO_DAILY_USD`) but `/ingest` 403s — one visitor can't pollute the shared demo
+  journal the next one sees. `/keys` already 403s.
+- **Seed into the shared Postgres.** `seed_demo.py` seeds the demo user + entries +
+  **pgvector embeddings** (so demo search works) into `DATABASE_URL` (Postgres),
+  falling back to the SQLite demo db only when no `DATABASE_URL` is set — never the
+  real `journal.db` by accident. Its wipe is now **demo-user-scoped** (delete only
+  that user's rows; the old whole-file unlink is unsafe in a shared DB). Verified:
+  seeding + re-seeding leaves Maeve's 980 entries + embeddings untouched.
+- **Frontend.** `App` already renders for any non-null user, so under `PUBLIC_DEMO`
+  a logged-out visitor lands *in* the demo (no `LoginGate`). Added a `DemoBanner`
+  (shown when `user.demo`) — "you're exploring a sample journal, sign in to start
+  your own" — the conversion CTA. `LoginGate` stays for the private-instance 401.

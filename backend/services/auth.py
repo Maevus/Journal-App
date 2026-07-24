@@ -34,6 +34,31 @@ SESSION_TTL = timedelta(days=14)
 DEMO_GOOGLE_SUB = "demo"
 DEMO_EMAIL = "demo@journal.local"
 
+# The demo user's id, cached once resolved. Demo-ness is now a per-user fact (one
+# app instance serves the demo visitor AND real logged-in users), so quota/model
+# decisions ask "is this the demo user?" rather than a global flag. Only a
+# non-None result is cached, so it starts working the moment the demo is seeded.
+_demo_user_id: Optional[int] = None
+
+
+def is_demo_user(user: User) -> bool:
+    """True when `user` is the seeded demo account (anchored on its stable sub)."""
+    return user.google_sub == DEMO_GOOGLE_SUB
+
+
+def demo_user_id(db: Session) -> Optional[int]:
+    """The seeded demo user's id, or None if the demo hasn't been seeded. Cached."""
+    global _demo_user_id
+    if _demo_user_id is None:
+        user = db.exec(select(User).where(User.google_sub == DEMO_GOOGLE_SUB)).first()
+        _demo_user_id = user.id if user is not None else None
+    return _demo_user_id
+
+
+def is_demo_user_id(db: Session, user_id: Optional[int]) -> bool:
+    """`is_demo_user` for call sites that hold only a user_id (quota, llm_client)."""
+    return user_id is not None and user_id == demo_user_id(db)
+
 
 def get_or_create_user(db: Session, *, google_sub: str, email: str) -> User:
     """Resolve a Google login to our account, creating it on first sight.
@@ -113,13 +138,20 @@ def get_current_user(
     session_token: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE),
     db: Session = Depends(get_session),
 ) -> User:
-    """FastAPI dependency: the logged-in `User`, or 401. The auth gate."""
-    if config.IS_DEMO:
-        return get_or_create_user(db, google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
+    """FastAPI dependency: the current `User`, or 401. The auth gate.
+
+    Resolution order: a valid session → that real user (so a logged-in visitor is
+    always themselves). Otherwise the seeded demo user when demo access is enabled
+    — `IS_DEMO` (whole-app demo: everyone is the demo user) or `PUBLIC_DEMO` (the
+    signed-out state of the one app: a visitor without an account sees the demo,
+    read-only). Otherwise 401 (a private instance, logged out).
+    """
     user = resolve_session(db, session_token)
-    if user is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Not authenticated",
-        )
-    return user
+    if user is not None:
+        return user
+    if config.IS_DEMO or config.PUBLIC_DEMO:
+        return get_or_create_user(db, google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Not authenticated",
+    )

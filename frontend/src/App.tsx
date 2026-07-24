@@ -4,6 +4,7 @@ import { exportUrl } from './api/client'
 import { AccountPanel } from './components/AccountPanel'
 import { AuthWidget } from './components/AuthWidget'
 import { ChatPanel } from './components/ChatPanel'
+import { DemoBanner } from './components/DemoBanner'
 import { LoginGate } from './components/LoginGate'
 import { MoodChart } from './components/MoodChart'
 import { SearchPanel } from './components/SearchPanel'
@@ -27,6 +28,7 @@ function App() {
 
   return (
     <div className="min-h-screen bg-paper font-sans text-ink">
+      {user.demo && <DemoBanner />}
       <header className="border-b-4 border-ink bg-white px-4 py-4 sm:px-6">
         <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <div>

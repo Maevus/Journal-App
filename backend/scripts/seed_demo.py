@@ -32,17 +32,22 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 os.chdir(BACKEND_DIR)
 sys.path.insert(0, str(BACKEND_DIR))
 
-DEMO_DB = "demo_journal.db"
+# Seed into DATABASE_URL when set — the shared Postgres, where the demo is a
+# signed-out seed user (shape B) and its pgvector embeddings power real search.
+# With no DATABASE_URL, fall back to the SQLite demo db (APP_MODE=demo → a quick
+# no-Postgres demo, search dormant). Never the real journal.db by accident.
+# Set before importing config, which reads the env at import time.
+if not os.getenv("DATABASE_URL"):
+    os.environ["APP_MODE"] = "demo"
 
-# Must be set before importing models/services — config reads env at import time.
-# APP_MODE=demo derives the demo db (and Keep-sync-off) in one switch.
-os.environ["APP_MODE"] = "demo"
+from sqlmodel import Session, select  # noqa: E402
 
-from sqlmodel import Session, SQLModel  # noqa: E402
-
+import config  # noqa: E402
 from clock import utcnow_naive  # noqa: E402
 from models.journal import JournalEntry, engine  # noqa: E402
-from models.user import User  # noqa: E402
+from models.keys import UserApiKey  # noqa: E402
+from models.usage import LLMUsage  # noqa: E402
+from models.user import User, UserSession  # noqa: E402
 from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB  # noqa: E402
 from services.embeddings import embed_and_store  # noqa: E402
 from services.ingestion import compute_hash  # noqa: E402
@@ -251,16 +256,35 @@ DEMO_ENTRIES: list[tuple[int, int, str, float, str]] = [
 ]
 
 
-def _stamp_alembic_head() -> None:
-    """Mark the demo DB as being at the latest migration without running any DDL
-    (the schema already exists from create_all). config.DATABASE_URL is the demo
-    db here (APP_MODE=demo), which env.py picks up."""
+def _run_migrations() -> None:
+    """Bring the target DB to head via Alembic — builds `entry_embeddings` on
+    Postgres (so demo search works) and is a no-op on an already-migrated DB.
+    Uniform across SQLite (fallback) and Postgres. env.py reads config.DATABASE_URL."""
     from alembic import command
     from alembic.config import Config
 
     cfg = Config()
     cfg.set_main_option("script_location", str(BACKEND_DIR / "alembic"))
-    command.stamp(cfg, "head")
+    command.upgrade(cfg, "head")
+
+
+def _wipe_demo_user(session: Session) -> None:
+    """Idempotent reset — delete ONLY the demo user's rows, never anyone else's.
+
+    The demo now lives *in the shared DB* alongside real users, so the old
+    whole-file wipe is unsafe. Delete the demo user's owned rows first (FKs to
+    users block deleting the user otherwise); entry_embeddings cascades from
+    journalentry on Postgres. Then the user itself.
+    """
+    demo = session.exec(select(User).where(User.google_sub == DEMO_GOOGLE_SUB)).first()
+    if demo is None:
+        return
+    for model in (JournalEntry, LLMUsage, UserApiKey, UserSession):
+        for row in session.exec(select(model).where(model.user_id == demo.id)).all():
+            session.delete(row)
+    session.commit()  # clear children before the parent (FK order)
+    session.delete(demo)
+    session.commit()
 
 
 def _demo_reasoning(mood: float) -> str:
@@ -278,23 +302,16 @@ def _demo_reasoning(mood: float) -> str:
 
 
 def main() -> None:
-    db_path = Path(DEMO_DB)
-    if db_path.exists():
-        db_path.unlink()
-
-    SQLModel.metadata.create_all(engine)
-    # The app self-migrates on startup (main._run_migrations → alembic upgrade
-    # head). Stamp this freshly-built DB at head so that startup is a clean no-op
-    # instead of trying to re-CREATE the tables create_all just made.
-    _stamp_alembic_head()
+    _run_migrations()  # schema to head (builds entry_embeddings on Postgres)
 
     now = utcnow_naive()
     goodnotes_page = 0
     counts: dict[str, int] = {}
 
     with Session(engine) as session:
-        # The always-logged-in demo account (services/auth.py resolves to it in
-        # demo mode). Seeded entries belong to it so user-scoped reads see them.
+        _wipe_demo_user(session)  # idempotent, demo-scoped — never touches real users
+        # The seeded demo account. Signed-out visitors resolve to it under
+        # PUBLIC_DEMO; its entries are what they see.
         demo_user = User(google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
         session.add(demo_user)
         session.commit()
@@ -328,16 +345,20 @@ def main() -> None:
             session.add(entry)
             session.commit()
             session.refresh(entry)
-            # No-ops on the SQLite demo (pgvector is Postgres-only). Semantic
-            # search returns when the demo moves onto Postgres as a seed user.
+            # Populates pgvector on Postgres (demo search works); no-ops on the
+            # SQLite fallback (search dormant there).
             embed_and_store(entry.id, content, user_id=demo_user.id)
             counts[source] = counts.get(source, 0) + 1
 
     span_days = max(days_ago for days_ago, *_ in DEMO_ENTRIES)
-    print(f"Seeded {sum(counts.values())} entries over the last {span_days} days into {DEMO_DB}:")
+    print(f"Seeded {sum(counts.values())} entries over the last {span_days} days")
+    print(f"into {config.DATABASE_URL} as the demo user (id {demo_user.id}):")
     for source, n in sorted(counts.items()):
         print(f"  {source:12s} {n}")
-    print("\nRun the demo backend with:\n  APP_MODE=demo uvicorn main:app")
+    print(
+        "\nServe it: point the app at the same DB and set PUBLIC_DEMO=1 so signed-out\n"
+        "visitors see the demo (or APP_MODE=demo for a standalone everyone-is-demo run)."
+    )
 
 
 if __name__ == "__main__":

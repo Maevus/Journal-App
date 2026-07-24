@@ -57,14 +57,15 @@ def resolve_model(*, user_id: Optional[int], on_own_key: Optional[bool] = None) 
     """
     if user_id is None:
         raise ValueError("no owner: unowned system work does not generate (F3)")
-    # In demo mode every visitor is the seeded demo user, so the mode picks the
-    # model — the showcase stays on the premium model regardless.
-    if config.IS_DEMO:
-        return config.DEMO_MODEL
-    # F4: a user on their own key pays their own way, so they get the premium
-    # model, not the free-tier default. This is the first-class account payoff.
-    if on_own_key is None:
-        with Session(engine) as session:
+    from services.auth import is_demo_user_id  # local import: avoids an import cycle
+
+    with Session(engine) as session:
+        # The demo user runs the showcase on the premium model regardless of key.
+        if is_demo_user_id(session, user_id):
+            return config.DEMO_MODEL
+        # F4: a user on their own key pays their own way, so they get the premium
+        # model, not the free-tier default — the first-class account payoff.
+        if on_own_key is None:
             on_own_key = key_store.has_user_key(session, user_id=user_id)
     return config.BYO_KEY_MODEL if on_own_key else config.FREE_TIER_MODEL
 

@@ -75,11 +75,19 @@ APP_ENCRYPTION_KEY = os.getenv("APP_ENCRYPTION_KEY")
 # premium model, not the free-tier default. Env-tunable like the others.
 BYO_KEY_MODEL = os.getenv("BYO_KEY_MODEL", "claude-opus-4-8")
 
-# Demo mode logs every visitor in as the seeded demo user, so the $0 free
-# tier would refuse the whole showcase (chat always, synthesis on any cache
-# miss). The demo gets its own small budget instead — bounded per day and
-# backstopped by the global cap.
+# The seeded demo user runs the showcase, so the $0 free tier would refuse it
+# (chat always, synthesis on any cache miss). The demo gets its own small budget
+# instead — bounded per day and backstopped by the global cap. Applied per-user
+# (whoever IS the demo user), not per-app, since one instance now serves the demo
+# visitor and real logged-in users at once.
 DEMO_DAILY_USD = float(os.getenv("DEMO_DAILY_USD", "1"))
+
+# Public demo (hosting shape B): when on, an unauthenticated request falls back to
+# the seeded demo user (read-only) instead of 401 — so a visitor who lands without
+# an account sees the demo, and signing in gives them their own journal in the same
+# app. Off (default) = private instance: logged-out → 401. Distinct from
+# APP_MODE=demo, which resolves EVERY request (even logged-in) to the demo user.
+PUBLIC_DEMO = os.getenv("PUBLIC_DEMO", "0").lower() not in ("0", "false", "no", "")
 
 # Service-wide daily spend cap across ALL users and system work — the
 # kill-switch that bounds the worst day our API key can have. Defaults to a

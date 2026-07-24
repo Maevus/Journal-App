@@ -128,22 +128,37 @@ def test_global_cap_stops_system_work_too(meter_db, monkeypatch):
         check_quota(user_id=None)
 
 
-def test_demo_mode_grants_the_demo_budget(meter_db, monkeypatch):
-    """Demo mode logs every visitor in as the seeded demo user, who is keyless
-    — under the $0 free tier the whole showcase would refuse (chat always,
-    synthesis on any cache miss). Demo gets its own small env-tunable budget
-    instead (decided 2026-07-13), bounded per day and backstopped by the
-    global cap."""
-    monkeypatch.setattr(config, "IS_DEMO", True)
+def test_demo_user_gets_the_demo_budget_not_the_free_tier(meter_db, monkeypatch):
+    """The seeded demo user is keyless — under the $0 free tier the whole showcase
+    would refuse (chat always, synthesis on any cache miss). It gets its own small
+    env-tunable budget instead. Per-user now: a real keyless user in the SAME DB
+    stays on the (here $0) free tier, so the two don't share a budget."""
+    from models.user import User
+    from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB
+
     monkeypatch.setattr(config, "DEMO_DAILY_USD", 1.0)
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.0)
     monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
 
-    _spend(meter_db, user_id=1, cost=0.50)
-    check_quota(user_id=1)  # $0.50 < the $1 demo budget → allowed
+    with Session(meter_db) as s:
+        demo = User(google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
+        real = User(google_sub="real-sub", email="real@example.com")
+        s.add_all([demo, real])
+        s.commit()
+        s.refresh(demo)
+        s.refresh(real)
+        demo_id, real_id = demo.id, real.id
 
-    _spend(meter_db, user_id=1, cost=0.50)
+    _spend(meter_db, user_id=demo_id, cost=0.50)
+    check_quota(user_id=demo_id)  # $0.50 < the $1 demo budget → allowed
+
+    _spend(meter_db, user_id=demo_id, cost=0.50)
     with pytest.raises(QuotaExceededError):
-        check_quota(user_id=1)  # $1.00 == the demo budget → exhausted
+        check_quota(user_id=demo_id)  # $1.00 == the demo budget → exhausted
+
+    # A real keyless user in the same DB is on the $0 free tier, not the demo's.
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=real_id)
 
 
 def test_own_key_user_is_exempt_from_all_caps(meter_db, budget):

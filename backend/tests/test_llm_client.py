@@ -204,11 +204,21 @@ def test_resolve_model_free_tier_is_haiku():
     assert llm.resolve_model(user_id=1) == "claude-haiku-4-5"
 
 
-def test_resolve_model_demo_is_premium(monkeypatch):
-    """Demo mode runs the showcase on the premium model, bounded by the demo
-    budget — the whole point of the separate DEMO_MODEL knob."""
-    monkeypatch.setattr(config, "IS_DEMO", True)
-    assert llm.resolve_model(user_id=1) == "claude-opus-4-8"
+def test_resolve_model_demo_user_is_premium(meter_db):
+    """The demo user runs the showcase on the premium model, bounded by the demo
+    budget — the whole point of the separate DEMO_MODEL knob. Per-user now: it's
+    the demo *account*, not a global mode, that picks the model."""
+    from models.user import User
+    from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB
+
+    with Session(meter_db) as s:
+        demo = User(google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
+        s.add(demo)
+        s.commit()
+        s.refresh(demo)
+        demo_id = demo.id
+
+    assert llm.resolve_model(user_id=demo_id) == "claude-opus-4-8"
 
 
 def test_resolve_model_byo_user_gets_premium(meter_db):

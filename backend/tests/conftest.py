@@ -57,6 +57,18 @@ def _stub_embeddings(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_demo_user_cache():
+    """services.auth caches the demo user's id (a per-process constant in prod).
+    Each test uses a fresh DB, so clear it around every test or a stale id leaks
+    across tests."""
+    import services.auth as auth
+
+    auth._demo_user_id = None
+    yield
+    auth._demo_user_id = None
+
+
+@pytest.fixture(autouse=True)
 def quota_headroom(monkeypatch):
     """The shipped default budget is $0 (the keyless launch posture), which
     would refuse every attributed LLM call in the suite. Give tests generous
