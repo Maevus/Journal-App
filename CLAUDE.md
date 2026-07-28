@@ -86,4 +86,4 @@ Tests use Vitest + Testing Library (jsdom) — config lives in `vite.config.ts` 
 
 ## Skills
 
-Matt Pocock's agent skills are installed under `.agents/skills/` (managed via `skills-lock.json`). Use `/skill-name` in Claude Code to invoke them (e.g. `/prototype`, `/tdd`, `/diagnose`).
+Matt Pocock's agent skills are installed under `.claude/skills/` (managed via `skills-lock.json`). Use `/skill-name` in Claude Code to invoke them (e.g. `/prototype`, `/tdd`, `/diagnose`).

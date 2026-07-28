@@ -13,7 +13,7 @@ out="docs/handoffs/handoff-$(date +%Y%m%d-%H%M%S).md"
 
 Use `$out` as the destination. (`docs/handoffs/` is gitignored — local-only, not committed.) Read the file before you write to it.
 
-Update /docs/decions.md with any key decisions made.
+Update `docs/decisions.md` with any key decisions made.
 
 Suggest the skills to be used, if any, by the next session.
 
