@@ -27,7 +27,9 @@ _BACKEND = Path(__file__).resolve().parent.parent
 def _alembic_config(url: str) -> Config:
     cfg = Config()
     cfg.set_main_option("script_location", str(_BACKEND / "alembic"))
-    cfg.set_main_option("sqlalchemy.url", url)  # env.py honours an explicit url
+    # % is ConfigParser interpolation syntax — escape it so a URL-encoded
+    # password doesn't raise. get_main_option un-escapes on read.
+    cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))  # env.py honours an explicit url
     return cfg
 
 

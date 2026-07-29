@@ -41,6 +41,22 @@ def test_callback_creates_user_sets_cookie_and_redirects(client, monkeypatch):
         assert users[0].google_sub == "sub-1"
 
 
+def test_callback_marks_the_session_cookie_secure_when_configured(client, monkeypatch):
+    """COOKIE_SECURE must actually reach the Set-Cookie header. It is explicit
+    config rather than `request.url.scheme == "https"` because behind a
+    TLS-terminating proxy the app sees plain http and would ship the session
+    token without Secure — leaking it to anyone who can nudge the user to http://.
+    """
+    import config
+
+    monkeypatch.setattr(config, "COOKIE_SECURE", True)
+    _fake_google_login(monkeypatch)
+
+    resp = client.get("/auth/callback", follow_redirects=False)
+
+    assert "Secure" in resp.headers["set-cookie"]
+
+
 def test_callback_repeat_login_reuses_account(client, monkeypatch):
     _fake_google_login(monkeypatch)
     client.get("/auth/callback", follow_redirects=False)

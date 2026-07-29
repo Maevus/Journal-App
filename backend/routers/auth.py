@@ -94,7 +94,7 @@ async def callback(request: Request, db: Session = Depends(get_session)):
         max_age=int(SESSION_TTL.total_seconds()),
         httponly=True,  # invisible to JS — an XSS can't exfiltrate the token
         samesite="lax",  # sent on top-level navigation, withheld cross-site
-        secure=request.url.scheme == "https",  # localhost dev stays http
+        secure=config.COOKIE_SECURE,  # explicit: request.url.scheme reads http behind a TLS proxy
     )
     return response
 

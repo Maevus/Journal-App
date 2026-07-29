@@ -46,7 +46,11 @@ target_metadata = SQLModel.metadata
 # programmatic upgrade and the CLI both hit config.DATABASE_URL, while tests can
 # point Alembic at a scratch DB by setting sqlalchemy.url on their Config.
 _db_url = config.get_main_option("sqlalchemy.url") or app_config.DATABASE_URL
-config.set_main_option("sqlalchemy.url", _db_url)
+# Alembic stores this in a ConfigParser, where % is interpolation syntax — a
+# URL-encoded password (postgres://u:p%40ss@…, which managed hosts generate
+# routinely) would raise ValueError here. Escape on write; get_main_option
+# un-escapes on read, so SQLAlchemy still receives the original URL.
+config.set_main_option("sqlalchemy.url", _db_url.replace("%", "%%"))
 
 # Batch mode lets future ALTERs work on SQLite (demo/tests), which can't ALTER
 # constraints in place; harmless on Postgres.

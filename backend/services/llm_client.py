@@ -130,6 +130,13 @@ def _pre_call(
     return model, _async_client(api_key)
 
 
+def _estimate_tokens(text: str) -> int:
+    """Rough token count (~4 chars/token) for metering a stream that was aborted
+    before Anthropic reported real usage. Rounds up — over-charging an abandoned
+    call is safer than under-charging it."""
+    return max(1, (len(text) + 3) // 4)
+
+
 def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Optional[int]) -> None:
     """Meter one finished LLM call: operator log line + a persisted LLMUsage row.
 
@@ -197,33 +204,63 @@ async def stream_text(
     model, client = _pre_call(model, user_id=user_id)
     last_err: Exception | None = None
 
-    for attempt in range(max_retries):
-        try:
-            async with client.messages.stream(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
-            ) as stream:
-                async for chunk in stream.text_stream:
-                    yield chunk
-                msg = await stream.get_final_message()
-                _log_usage(model, msg.usage.input_tokens, msg.usage.output_tokens, user_id=user_id)
-                return
-        except _RETRYABLE as exc:
-            last_err = exc
-            if attempt < max_retries - 1:
-                delay = 2**attempt
-                logger.warning(
-                    "LLM stream attempt %d/%d failed (%s), retrying in %ds",
-                    attempt + 1,
-                    max_retries,
-                    type(exc).__name__,
-                    delay,
-                )
-                await asyncio.sleep(delay)
+    # A client that hangs up mid-stream unwinds this generator at `yield`, so
+    # get_final_message() is never reached and the call would be metered as $0
+    # while Anthropic still bills it. That makes DEMO_DAILY_USD and
+    # GLOBAL_DAILY_USD bypassable by disconnecting early, so the partial has to
+    # be metered from a finally. The estimate deliberately errs high: charging
+    # slightly too much for an abandoned call is the safe direction.
+    metered = False
+    started = False
+    delivered: list[str] = []
 
-    raise last_err  # type: ignore[misc]
+    def _meter_partial() -> None:
+        prompt_text = (system or "") + "".join(
+            m["content"] for m in messages if isinstance(m.get("content"), str)
+        )
+        _log_usage(
+            model,
+            _estimate_tokens(prompt_text),
+            _estimate_tokens("".join(delivered)),
+            user_id=user_id,
+        )
+
+    try:
+        for attempt in range(max_retries):
+            try:
+                async with client.messages.stream(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                ) as stream:
+                    started = True
+                    async for chunk in stream.text_stream:
+                        delivered.append(chunk)
+                        yield chunk
+                    msg = await stream.get_final_message()
+                    _log_usage(
+                        model, msg.usage.input_tokens, msg.usage.output_tokens, user_id=user_id
+                    )
+                    metered = True
+                    return
+            except _RETRYABLE as exc:
+                last_err = exc
+                if attempt < max_retries - 1:
+                    delay = 2**attempt
+                    logger.warning(
+                        "LLM stream attempt %d/%d failed (%s), retrying in %ds",
+                        attempt + 1,
+                        max_retries,
+                        type(exc).__name__,
+                        delay,
+                    )
+                    await asyncio.sleep(delay)
+
+        raise last_err  # type: ignore[misc]
+    finally:
+        if started and not metered:
+            _meter_partial()
 
 
 async def structured_output(

@@ -6,7 +6,7 @@ from sqlmodel import Session
 
 from models.journal import get_session
 from models.user import User
-from services.auth import get_current_user, is_demo_user
+from services.auth import require_writable_user
 from services.ingestion import (
     ingest_entries,
     ingest_goodnotes,
@@ -37,14 +37,11 @@ async def ingest(
     ),
     request: Optional[IngestRequest] = None,
     session: Session = Depends(get_session),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_writable_user),
 ):
     # The demo is a read-only showcase: a signed-out visitor must not write to the
     # shared demo journal (chat + search stay open, bounded by the demo budget).
-    if is_demo_user(user):
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "The demo journal is read-only — sign in to add entries."
-        )
+    # require_writable_user enforces that for every mutating route.
     if source == "keep":
         stats, new_entries = await ingest_keep(session)
     elif source == "goodnotes":

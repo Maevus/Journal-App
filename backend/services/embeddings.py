@@ -17,6 +17,7 @@ from typing import List, Tuple
 
 from sqlalchemy import text
 
+import config
 from models.journal import engine
 
 logger = logging.getLogger(__name__)
@@ -37,7 +38,10 @@ def _get_embedder():
     if _embedder is None:
         from fastembed import TextEmbedding
 
-        _embedder = TextEmbedding(_MODEL_NAME)
+        # Pin the cache when configured; fastembed otherwise defaults to the
+        # system temp dir, which a cold start wipes (see config.FASTEMBED_CACHE_DIR).
+        kwargs = {"cache_dir": config.FASTEMBED_CACHE_DIR} if config.FASTEMBED_CACHE_DIR else {}
+        _embedder = TextEmbedding(_MODEL_NAME, **kwargs)
     return _embedder
 
 

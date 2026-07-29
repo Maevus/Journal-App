@@ -68,11 +68,19 @@ def _run_migrations() -> None:
     cfg.set_main_option("script_location", str(Path(__file__).resolve().parent / "alembic"))
     try:
         command.upgrade(cfg, "head")
-    except Exception:  # noqa: BLE001
+    except Exception:
+        # Fail loudly. Swallowing this boots the app against whatever schema
+        # happens to be there — including none at all, which serves 500s on
+        # every request while looking healthy to a port check. A legacy
+        # pre-Alembic DB (tables, no alembic_version) still needs a one-time
+        # `alembic stamp head`; that is a deliberate operator action, not
+        # something to paper over on every boot.
         logger.exception(
-            "alembic upgrade failed; if this is a legacy pre-Alembic DB, run "
-            "`alembic stamp head` once. Continuing with the existing schema."
+            "alembic upgrade failed — refusing to serve on an unknown schema. "
+            "For a legacy pre-Alembic DB run `alembic stamp head` once. "
+            "To run migrations as a deploy step instead, set AUTO_MIGRATE=0."
         )
+        raise
 
 
 def _sync_on_startup_enabled() -> bool:
@@ -145,7 +153,14 @@ async def lifespan(app: FastAPI):
         config.DATABASE_URL,
         config.SYNC_ON_STARTUP,
     )
-    _run_migrations()  # bring schema to head (Alembic; replaces create_all + ensure_schema)
+    # Self-migrating on boot keeps `uvicorn main:app` a one-liner in dev. In
+    # production set AUTO_MIGRATE=0 and run `alembic upgrade head` as a deploy
+    # step: it gives a human checkpoint before DDL touches real data, and avoids
+    # N workers racing to upgrade the same database concurrently.
+    if config.AUTO_MIGRATE:
+        _run_migrations()
+    else:
+        logger.info("AUTO_MIGRATE=0 — skipping startup migration; run `alembic upgrade head`")
     # Fire-and-forget so the server is usable immediately; new notes fold in
     # moments later rather than blocking boot on a full Keep sync.
     sync_task = asyncio.create_task(_startup_keep_sync()) if _sync_on_startup_enabled() else None

@@ -78,6 +78,39 @@ async def test_stream_text_persists_an_attributed_usage_row(monkeypatch, meter_d
     assert row.cost == pytest.approx(1000 * 1e-6 + 500 * 5e-6)
 
 
+async def test_aborted_stream_is_still_metered(monkeypatch, meter_db):
+    """A client that hangs up mid-stream unwinds the generator at `yield`, so
+    `get_final_message()` never runs. Metering only on that path would record $0
+    for a call Anthropic has already billed — making DEMO_DAILY_USD and
+    GLOBAL_DAILY_USD bypassable by reading one frame and disconnecting, on repeat.
+    """
+    _fake_streaming_client(monkeypatch)
+
+    gen = llm.stream_text(prompt="hi", model="claude-haiku-4-5", user_id=7)
+    assert await anext(gen) == "hel"  # take one token...
+    await gen.aclose()  # ...then hang up, as Starlette does on disconnect
+
+    [row] = _rows(meter_db)
+    assert row.user_id == 7
+    assert row.model == "claude-haiku-4-5"
+    assert row.cost > 0, "an aborted stream recorded $0 — the spend cap is bypassable"
+
+
+async def test_repeated_aborts_each_record_spend(monkeypatch, meter_db):
+    """The exploit shape: a loop of open-read-one-token-close must accumulate
+    spend, so the quota gate eventually sees it and refuses."""
+    _fake_streaming_client(monkeypatch)
+
+    for _ in range(5):
+        gen = llm.stream_text(prompt="hi", model="claude-haiku-4-5", user_id=7)
+        await anext(gen)
+        await gen.aclose()
+
+    rows = _rows(meter_db)
+    assert len(rows) == 5
+    assert sum(r.cost for r in rows) > 0
+
+
 async def test_structured_output_persists_a_system_row(monkeypatch, meter_db):
     _fake_tool_client(monkeypatch)
 

@@ -43,6 +43,17 @@ def require_test_database_url() -> str:
 
 
 @pytest.fixture(autouse=True)
+def insecure_cookies(monkeypatch):
+    """`config.COOKIE_SECURE` defaults on, which is right in production and wrong
+    for TestClient: it speaks plain http, so httpx drops a Secure cookie and every
+    follow-up request arrives unauthenticated. Turn it off for the suite; the one
+    test that asserts the production behaviour re-enables it explicitly."""
+    import config
+
+    monkeypatch.setattr(config, "COOKIE_SECURE", False)
+
+
+@pytest.fixture(autouse=True)
 def meter_db(monkeypatch):
     """llm_client persists a usage row for every LLM call through its own
     engine — point it at a fresh in-memory DB for every test so metering can

@@ -13,7 +13,7 @@ import config
 from models.journal import get_session
 from models.user import User
 from services import key_store
-from services.auth import get_current_user, is_demo_user
+from services.auth import get_current_user, require_writable_user
 from services.llm_client import key_is_valid
 
 router = APIRouter()
@@ -38,16 +38,15 @@ def key_status(
 @router.post("")
 async def set_key(
     body: KeyIn,
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_writable_user),
     db: Session = Depends(get_session),
 ):
-    """Validate a BYO key against Anthropic, then store it encrypted."""
-    if is_demo_user(user):
-        # The demo account is shared across every signed-out visitor — one must
-        # not set a key on it, or everyone's calls would run on that key.
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Key management is disabled for the demo account"
-        )
+    """Validate a BYO key against Anthropic, then store it encrypted.
+
+    The demo account is shared across every signed-out visitor — one must not set
+    a key on it, or everyone's calls would run on that key. `require_writable_user`
+    enforces that.
+    """
     if not config.APP_ENCRYPTION_KEY:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -66,7 +65,7 @@ async def set_key(
 
 @router.delete("")
 def delete_key(
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_writable_user),
     db: Session = Depends(get_session),
 ):
     """Remove the stored key — reverts the user to the free tier / app key."""

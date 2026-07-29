@@ -1,0 +1,22 @@
+# Never ship secrets or local state into the image.
+.env
+*.db
+*.db-journal
+demo_journal.db
+journal.db
+
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local-only vector/model caches — the image bakes its own.
+chroma_db/
+demo_chroma_db/
+fastembed_cache/
+
+docker-compose.yml
+Dockerfile
+.dockerignore

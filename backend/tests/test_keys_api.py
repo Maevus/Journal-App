@@ -77,3 +77,28 @@ def test_demo_mode_blocks_key_management(client, monkeypatch):
     monkeypatch.setattr(config, "IS_DEMO", True)
     _accept(monkeypatch)
     assert client.post("/keys", json={"api_key": "sk-ant-x"}).status_code == 403
+
+
+# Every route that MUTATES state, with a valid request shape so a failure is the
+# read-only gate (403) and never validation (422). The demo account is shared by
+# all signed-out visitors, so a write from one is visible to every other — and
+# could clear the account's stored key. `require_writable_user` is what enforces
+# this; when a new mutating route is added it belongs in this list too.
+#
+# POST /search and POST /stream/chat are deliberately absent: they are POSTs but
+# read nothing back into the database, and the demo is meant to exercise them
+# (bounded by DEMO_DAILY_USD). POST /auth/logout is absent because for a demo
+# visitor there is no session cookie to revoke, so it is already a no-op.
+WRITE_ROUTES = [
+    ("post", "/ingest", {"json": {"entries": ["a new entry"], "source": "text"}}),
+    ("post", "/keys", {"json": {"api_key": "sk-ant-x"}}),
+    ("delete", "/keys", {}),
+]
+
+
+@pytest.mark.parametrize("method,path,kwargs", WRITE_ROUTES, ids=[r[1] + ":" + r[0] for r in WRITE_ROUTES])
+def test_demo_user_cannot_reach_any_write_route(client, monkeypatch, method, path, kwargs):
+    monkeypatch.setattr(config, "IS_DEMO", True)
+    _accept(monkeypatch)
+
+    assert getattr(client, method)(path, **kwargs).status_code == 403

@@ -110,3 +110,24 @@ SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 
 # Where the callback sends the browser after login — the SPA's origin.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# Run `alembic upgrade head` during app startup. Convenient in dev (one command
+# to a working server) and wrong in production: it applies DDL to real data with
+# no human checkpoint, and N workers race to do it at once. Set AUTO_MIGRATE=0
+# there and run the upgrade as an explicit deploy step.
+AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "1").lower() not in ("0", "false", "no", "")
+
+# `Secure` on the session cookie. Deriving this from request.url.scheme is wrong
+# behind a TLS-terminating proxy: the app sees plain http from the load balancer
+# and would ship the session token without Secure, leaking it to anyone who can
+# nudge the user to http://. So it is explicit config, defaulting to on.
+# Browsers accept Secure cookies on http://localhost, so dev works unchanged —
+# set COOKIE_SECURE=0 only if serving dev over a plain-http LAN address.
+COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").lower() not in ("0", "false", "no", "")
+
+# Where fastembed caches the ~90 MB embedding model. Unset, it lands in the
+# system temp dir, which scale-to-zero hosts wipe between cold starts — turning
+# the first search of each cold start into a synchronous download inside the
+# request. Point this at persistent storage, or bake the model into the image at
+# this path (see backend/Dockerfile, which does the latter).
+FASTEMBED_CACHE_DIR = os.getenv("FASTEMBED_CACHE_DIR", "")

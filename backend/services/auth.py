@@ -155,3 +155,20 @@ def get_current_user(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Not authenticated",
     )
+
+
+def require_writable_user(user: User = Depends(get_current_user)) -> User:
+    """`get_current_user`, but 403 for the shared demo account.
+
+    The demo journal is one account shared by every signed-out visitor, so a
+    write from any of them would be visible to all the others — and could spend
+    on or clear the account's settings. Every mutating route depends on this
+    instead of `get_current_user`, so the read-only invariant holds by
+    construction rather than by remembering an `if` on each new write route.
+    """
+    if is_demo_user(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="The demo journal is read-only — sign in to make changes.",
+        )
+    return user
