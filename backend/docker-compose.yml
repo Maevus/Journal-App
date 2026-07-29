@@ -18,7 +18,11 @@ services:
       POSTGRES_PASSWORD: journal
       POSTGRES_DB: journal
     ports:
-      - "5432:5432"
+      # Bind to loopback only. A bare "5432:5432" publishes on 0.0.0.0, which puts
+      # the journal and the BYO-key ciphertext on the LAN behind default creds —
+      # and POSTGRES_USER is the cluster superuser, so that also grants
+      # COPY … FROM PROGRAM. Nothing outside this machine needs the dev DB.
+      - "127.0.0.1:5432:5432"
     volumes:
       # Postgres 18 moved the container VOLUME to /var/lib/postgresql (PGDATA now
       # lives in a version subdir, /var/lib/postgresql/18/docker). Mounting the
