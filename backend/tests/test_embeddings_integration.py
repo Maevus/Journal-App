@@ -15,6 +15,7 @@ from alembic import command
 from alembic.config import Config
 
 import services.embeddings as emb
+from conftest import require_test_database_url
 from models.journal import JournalEntry
 from models.user import User
 
@@ -22,7 +23,8 @@ _BACKEND = Path(__file__).resolve().parent.parent
 
 pytestmark = pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
-    reason="set TEST_DATABASE_URL to a pgvector Postgres to run the embeddings integration tests",
+    reason="set TEST_DATABASE_URL to a scratch pgvector Postgres DB (name must end in "
+    "`_test`) to run the embeddings integration tests — they drop every table on the target",
 )
 
 
@@ -37,7 +39,7 @@ def _alembic_config(url: str) -> Config:
 def pg(monkeypatch):
     """Fresh pgvector schema on the test DB, two users to own entries, and
     emb.engine pointed at it. Cleans the schema down afterward."""
-    url = os.environ["TEST_DATABASE_URL"]
+    url = require_test_database_url()
     cfg = _alembic_config(url)
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")  # builds all tables incl. entry_embeddings + the extension

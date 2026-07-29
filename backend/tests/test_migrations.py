@@ -19,6 +19,7 @@ from sqlmodel import SQLModel
 
 from alembic import command
 from alembic.config import Config
+from conftest import require_test_database_url
 
 _BACKEND = Path(__file__).resolve().parent.parent
 
@@ -62,10 +63,11 @@ def test_migration_schema_matches_models(tmp_path):
 
 @pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
-    reason="set TEST_DATABASE_URL to a Postgres URL to run the real-DB migration smoke test",
+    reason="set TEST_DATABASE_URL to a scratch Postgres DB (name must end in `_test`) "
+    "to run the real-DB migration smoke test — it drops every table on the target",
 )
 def test_postgres_upgrade_downgrade_roundtrips():
-    url = os.environ["TEST_DATABASE_URL"]
+    url = require_test_database_url()
     cfg = _alembic_config(url)
 
     command.upgrade(cfg, "head")
@@ -78,7 +80,8 @@ def test_postgres_upgrade_downgrade_roundtrips():
 
 @pytest.mark.skipif(
     not os.getenv("TEST_DATABASE_URL"),
-    reason="set TEST_DATABASE_URL to a Postgres URL to run the real-DB constraint test",
+    reason="set TEST_DATABASE_URL to a scratch Postgres DB (name must end in `_test`) "
+    "to run the real-DB constraint test — it drops every table on the target",
 )
 def test_postgres_composite_unique_scopes_dedup_per_user():
     """The dedup unique is (user_id, content_hash): identical text from two users
@@ -89,7 +92,7 @@ def test_postgres_composite_unique_scopes_dedup_per_user():
     from models.journal import JournalEntry
     from models.user import User
 
-    url = os.environ["TEST_DATABASE_URL"]
+    url = require_test_database_url()
     cfg = _alembic_config(url)
     command.downgrade(cfg, "base")
     command.upgrade(cfg, "head")

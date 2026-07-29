@@ -4,6 +4,9 @@ Tests run against an in-memory SQLite DB and never touch the real journal.db or
 the pgvector store — `embed_and_store` (the vector-store write) is stubbed out for
 every test (and no-ops off Postgres anyway).
 """
+import os
+from urllib.parse import urlparse
+
 import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
@@ -13,6 +16,30 @@ from models.journal import JournalEntry
 from models.keys import UserApiKey  # noqa: F401 — registers the key table for create_all
 from models.usage import LLMUsage  # noqa: F401 — registers the usage table for create_all
 from models.user import User  # noqa: F401 — registers the users table for create_all
+
+TEST_DB_SUFFIX = "_test"
+
+
+def require_test_database_url() -> str:
+    """`TEST_DATABASE_URL`, refusing anything that isn't obviously a scratch DB.
+
+    The Postgres-backed tests run `alembic downgrade base`, which drops every
+    table on the target. Harmless on a throwaway database, destroys a real
+    journal — and the two are one environment variable apart. Opt in explicitly
+    by giving the database a `_test` suffix.
+    """
+    url = os.environ["TEST_DATABASE_URL"]
+    name = urlparse(url).path.lstrip("/")
+    if not name.endswith(TEST_DB_SUFFIX):
+        raise RuntimeError(
+            f"Refusing to run: TEST_DATABASE_URL names the database {name!r}, which "
+            f"lacks the {TEST_DB_SUFFIX!r} suffix. These tests drop every table on the "
+            "target. Point them at a scratch database instead:\n"
+            "  docker exec journal-postgres createdb -U journal journal_test\n"
+            "  TEST_DATABASE_URL=postgresql+psycopg://journal:journal@localhost:5432/"
+            "journal_test .venv/bin/pytest"
+        )
+    return url
 
 
 @pytest.fixture(autouse=True)
