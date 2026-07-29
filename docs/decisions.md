@@ -560,3 +560,45 @@ instance now serves the demo visitor and real logged-in users simultaneously.
   a logged-out visitor lands *in* the demo (no `LoginGate`). Added a `DemoBanner`
   (shown when `user.demo`) — "you're exploring a sample journal, sign in to start
   your own" — the conversion CTA. `LoginGate` stays for the private-instance 401.
+
+## Branch review + deploy readiness (2026-07-29)
+
+Reviewed the whole outstanding stack commit-by-commit and landed it on `main`, then
+fixed what blocks a real deploy. The stack was linear (datepicker ⊂ postgres-migration
+⊂ pgvector-switch ⊂ demo-signed-out), so review was scoped **per commit, not per
+branch** — reviewing per branch would have re-reviewed the datepicker four times.
+
+- **Land first, gate on `PUBLIC_DEMO`, not on the merge.** Nothing found was a
+  cross-tenant leak, and `PUBLIC_DEMO` defaults off, so `main` exposes nothing on its
+  own. The findings became a gated fix queue rather than a merge blocker.
+- **Metering moved into a `finally` (`llm_client.stream_text`).** A client that hangs
+  up mid-stream unwinds the generator at `yield`, so `get_final_message()` never ran
+  and the call recorded $0 while Anthropic still billed it — `DEMO_DAILY_USD` and
+  `GLOBAL_DAILY_USD` were both bypassable by reading one frame and disconnecting, on
+  loop. The partial estimate (~4 chars/token) deliberately rounds **up**: over-charging
+  an abandoned call is the safe direction.
+- **Read-only demo is now a dependency, not a convention.** `require_writable_user`
+  replaces hand-placed `is_demo_user` checks on every mutating route. The old pattern
+  had already failed once — `DELETE /keys` was missed, so a signed-out visitor could
+  clear the demo account's stored key. A parametrized test pins the write surface.
+- **Migrations: loud, and a deploy step in production.** A failed `alembic upgrade` now
+  aborts boot instead of being swallowed — the old behaviour booted clean on an empty
+  schema and 500'd every request while passing a port-based health check. `AUTO_MIGRATE`
+  defaults on (dev stays a one-liner) and the Dockerfile sets `0`, satisfying the
+  security checklist's §7 where it matters without breaking `dev.sh`.
+- **Cookie `Secure` is config, not `request.url.scheme`.** Behind a TLS-terminating
+  proxy the app sees plain http and would ship the session token unprotected.
+- **The image bakes the embedding model in** (`backend/Dockerfile`,
+  `FASTEMBED_CACHE_DIR=/opt/fastembed`). fastembed otherwise caches to the system temp
+  dir, so the "no stateful filesystem dependency" claim that motivated the Chroma
+  removal was not actually true — a scale-to-zero cold start pulled ~90 MB from
+  HuggingFace synchronously inside the first request. Verified with `--network none`.
+- **Postgres-backed tests refuse a non-`_test` database.** They run `alembic downgrade
+  base`; the skip message pointed at "a pgvector Postgres", and the only one documented
+  was the working database. Following the instructions destroyed it.
+- **Dev Postgres binds to loopback.** `"5432:5432"` published on `0.0.0.0` with
+  `journal`/`journal`, and that role is the cluster superuser.
+
+Known and accepted for now: the quota gate is still read-then-act (20 concurrent
+requests passed a $1 budget and spent $11), and there is no rate limiting anywhere.
+`GLOBAL_DAILY_USD` is the only hard stop. Both must be fixed before `PUBLIC_DEMO=1`.
