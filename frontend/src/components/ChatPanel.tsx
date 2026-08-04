@@ -53,8 +53,13 @@ export function ChatPanel() {
   // The question currently being answered (rendered live until it freezes into a Turn).
   const [pending, setPending] = useState<string | null>(null)
   const [selected, setSelected] = useState<{ date: string; source: string } | null>(null)
-  const { text, sources, error, quota, isStreaming, start, abort } = useChatStream()
+  const { text, sources, error, quota, rateLimited, isStreaming, start, abort } = useChatStream()
   const scrollRef = useRef<HTMLDivElement>(null)
+  // Both refusal frames are notices, not failures: the backend declined before
+  // spending (over budget) or because we're asking too fast. Only one can arrive
+  // per turn, so they share one banner — and it shows the *server's* wording,
+  // which knows the actual budget/window.
+  const refusal = quota ?? rateLimited
 
   // Keep the latest answer pinned to the bottom while tokens stream in.
   useEffect(() => {
@@ -145,13 +150,12 @@ export function ChatPanel() {
         </div>
       )}
 
-      {quota && !isStreaming && (
+      {refusal && !isStreaming && (
         <div
           className="mb-3 rounded-brutal border-2 border-ink bg-gold p-3 text-sm font-medium"
           role="status"
         >
-          Today&rsquo;s LLM budget is used up — asking resumes at midnight UTC.
-          Bring-your-own-key support is coming soon.
+          {refusal}
         </div>
       )}
 

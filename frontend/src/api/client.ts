@@ -110,11 +110,21 @@ export async function fetchEntriesByDate(
   return data.entries
 }
 
-export function synthesisUrl(limit = 20, days = 0, source: string | null = null): string {
-  // days=0 → all time; source=null → all sources
-  const params = new URLSearchParams({ limit: String(limit), days: String(days) })
-  if (source) params.set('source', source)
-  return `${BASE_URL}/stream/synthesis?${params}`
+/** What a synthesis run covers, POSTed as the request body.
+ *  `days: 0` → all time; `source: null` → all sources. */
+export interface SynthesisScope {
+  limit: number
+  days: number
+  source: string | null
+}
+
+/** Endpoint for the synthesis stream. POST, not GET, and the scope rides in the
+ *  body rather than a query string: a GET carrying the `SameSite=Lax` session
+ *  cookie is reachable by cross-site navigation, so any third-party page could
+ *  trigger this paid LLM call. A JSON POST requires a CORS preflight, which the
+ *  backend's origin allow-list refuses. Same bare-URL shape as chatStreamUrl. */
+export function synthesisUrl(): string {
+  return `${BASE_URL}/stream/synthesis`
 }
 
 /** One turn's role + text, as sent to / held by the multi-turn chat. */

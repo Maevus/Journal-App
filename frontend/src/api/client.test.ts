@@ -37,15 +37,11 @@ afterEach(() => {
 })
 
 describe('synthesisUrl', () => {
-  it('builds the default URL with limit and days', () => {
-    expect(synthesisUrl()).toBe(`${BASE}/stream/synthesis?limit=20&days=0`)
-  })
-
-  it('includes source only when provided', () => {
-    expect(synthesisUrl(10, 30, 'google_keep')).toBe(
-      `${BASE}/stream/synthesis?limit=10&days=30&source=google_keep`,
-    )
-    expect(synthesisUrl(10, 30, null)).not.toContain('source')
+  it('points at the synthesis stream endpoint, with no query string', () => {
+    // The scope moved into the POST body: a GET carrying the SameSite=Lax
+    // session cookie was reachable by cross-site navigation, and a JSON POST
+    // forces a CORS preflight the backend's allow-list refuses.
+    expect(synthesisUrl()).toBe(`${BASE}/stream/synthesis`)
   })
 })
 

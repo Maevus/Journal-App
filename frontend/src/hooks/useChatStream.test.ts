@@ -118,6 +118,47 @@ describe('useChatStream', () => {
     expect(result.current.error).toBeNull()
   })
 
+  it('captures a rate_limited refusal as its own notice, not an error', async () => {
+    // The rate limiter refuses the same way quota does — a named frame inside
+    // the 200 stream — so it must not surface as the red error banner.
+    const fetchMock = vi.fn().mockResolvedValue(
+      streamResponse([
+        'event: rate_limited\ndata: {"code":"rate_limited","message":"Too many requests. Try again in 30 seconds.","retry_after":30}\n\n',
+        'data: [DONE]\n\n',
+      ]),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { result } = renderHook(() => useChatStream())
+    act(() => result.current.start([{ role: 'user', content: 'hi' }]))
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    expect(result.current.rateLimited).toBe('Too many requests. Try again in 30 seconds.')
+    expect(result.current.quota).toBeNull()
+    expect(result.current.error).toBeNull()
+    expect(result.current.text).toBe('')
+  })
+
+  it('clears stale citation chips when the next turn starts', async () => {
+    // Sources are this hook's own state, not the shared client's — an answer's
+    // chips must not outlive it.
+    const first = streamResponse([
+      'data: "A"\n\n',
+      'event: sources\ndata: [{"n":1,"id":5,"date":"2026-05-10","source":"text","snippet":"hi"}]\n\n',
+      'data: [DONE]\n\n',
+    ])
+    const second = streamResponse(['data: "B"\n\n', 'data: [DONE]\n\n'])
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValueOnce(first).mockResolvedValueOnce(second))
+
+    const { result } = renderHook(() => useChatStream())
+    act(() => result.current.start([{ role: 'user', content: 'hi' }]))
+    await waitFor(() => expect(result.current.sources).toHaveLength(1))
+
+    act(() => result.current.start([{ role: 'user', content: 'again' }]))
+    await waitFor(() => expect(result.current.text).toBe('B'))
+    expect(result.current.sources).toEqual([])
+  })
+
   it('start() clears a previous quota notice', async () => {
     const refusal = streamResponse([
       'event: quota\ndata: {"code":"quota_exhausted","message":"daily LLM budget exhausted"}\n\n',
