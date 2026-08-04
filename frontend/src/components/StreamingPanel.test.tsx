@@ -3,11 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { StreamingPanel } from './StreamingPanel'
 
-// Controllable stand-in for the SSE hook.
+// Controllable stand-in for the synthesis stream hook.
 const sse = vi.hoisted(() => ({
   text: '',
   error: null as string | null,
   quota: null as string | null,
+  rateLimited: null as string | null,
   isStreaming: false,
   start: vi.fn(),
   abort: vi.fn(),
@@ -22,6 +23,7 @@ beforeEach(() => {
   sse.text = ''
   sse.error = null
   sse.quota = null
+  sse.rateLimited = null
   sse.isStreaming = false
   sse.start.mockClear()
   sse.abort.mockClear()
@@ -42,19 +44,29 @@ describe('StreamingPanel', () => {
     expect(sse.abort).toHaveBeenCalled()
   })
 
-  it('renders the streamed text and starts on click', () => {
+  it('renders the streamed text and starts with the current scope', () => {
     sse.text = 'Synthesis of your month'
-    render(<StreamingPanel range={range} source={allSources} />)
+    render(<StreamingPanel range={range} source={{ value: 'google_keep', label: 'Keep' }} />)
     expect(screen.getByText(/Synthesis of your month/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /generate synthesis/i }))
-    expect(sse.start).toHaveBeenCalled()
+    // The scope is now a POST body, not a query string baked into a URL at
+    // render time — so the panel passes it at start().
+    expect(sse.start).toHaveBeenCalledWith({ limit: 20, days: 30, source: 'google_keep' })
   })
 
   it('shows a friendly notice, not the error alert, on a quota refusal', () => {
     sse.quota = 'daily LLM budget exhausted'
     render(<StreamingPanel range={range} source={allSources} />)
-    expect(screen.getByText(/budget/i)).toBeInTheDocument()
+    // The backend's own wording is rendered — it knows the budget and reset time.
+    expect(screen.getByText('daily LLM budget exhausted')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull() // a refusal is not an error
+  })
+
+  it('shows the rate-limit refusal as a notice too', () => {
+    sse.rateLimited = 'Too many requests. Try again in 30 seconds.'
+    render(<StreamingPanel range={range} source={allSources} />)
+    expect(screen.getByRole('status')).toHaveTextContent('Try again in 30 seconds')
+    expect(screen.queryByRole('alert')).toBeNull() // slowing down is not a failure
   })
 
   it('flags the text stale when the scope changes after generating', () => {

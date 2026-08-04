@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
-import { synthesisUrl } from '../api/client'
 import { useSSE } from '../hooks/useSSE'
 import { SkeletonLoader } from './SkeletonLoader'
 import type { SourceFilter } from './SourceSelector'
@@ -12,9 +11,12 @@ interface StreamingPanelProps {
 }
 
 export function StreamingPanel({ range, source }: StreamingPanelProps) {
-  const { text, error, quota, isStreaming, start, abort } = useSSE(
-    synthesisUrl(20, range.days, source.value),
-  )
+  const { text, error, quota, rateLimited, isStreaming, start, abort } = useSSE()
+  // Both refusal frames are notices, not failures: the backend declined before
+  // spending (over budget) or because we're asking too fast. Only one can arrive
+  // per stream, so they share one banner — and it shows the *server's* wording,
+  // which knows the actual budget/window.
+  const refusal = quota ?? rateLimited
   const scopeLabel = source.value ? `${range.label} · ${source.label}` : range.label
   // Which period/source the visible text was generated for — synthesis costs an
   // LLM call, so changing the scope flags the text as stale instead of auto-rerunning.
@@ -30,7 +32,7 @@ export function StreamingPanel({ range, source }: StreamingPanelProps) {
 
   const handleStart = () => {
     setGeneratedFor(scopeLabel)
-    start()
+    start({ limit: 20, days: range.days, source: source.value })
   }
 
   const stale = text !== '' && generatedFor !== null && generatedFor !== scopeLabel
@@ -64,13 +66,12 @@ export function StreamingPanel({ range, source }: StreamingPanelProps) {
         </div>
       )}
 
-      {quota && !isStreaming && (
+      {refusal && !isStreaming && (
         <div
           className="mb-3 rounded-brutal border-2 border-ink bg-gold p-3 text-sm font-medium"
           role="status"
         >
-          Today&rsquo;s LLM budget is used up — it resets at midnight UTC.
-          Bring-your-own-key support is coming soon.
+          {refusal}
         </div>
       )}
 
@@ -95,7 +96,7 @@ export function StreamingPanel({ range, source }: StreamingPanelProps) {
         </div>
       )}
 
-      {!text && !isStreaming && !error && !quota && (
+      {!text && !isStreaming && !error && !refusal && (
         <p className="text-sm font-medium text-ink/50">
           Click &ldquo;Generate synthesis&rdquo; to analyse your journal entries from{' '}
           {range.label === 'All time' ? 'all time' : `the last ${range.label.toLowerCase()}`}.

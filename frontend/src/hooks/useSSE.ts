@@ -1,4 +1,6 @@
-import { useCallback, useRef, useState } from 'react'
+import { useCallback } from 'react'
+import { synthesisUrl, type SynthesisScope } from '../api/client'
+import { usePostStream } from './usePostStream'
 
 interface UseSSEReturn {
   text: string
@@ -6,70 +8,35 @@ interface UseSSEReturn {
   /** Message from an `event: quota` refusal frame (F2) — the backend refused
    *  the LLM call before spending. A refusal is an answer, not an error. */
   quota: string | null
+  /** Message from an `event: rate_limited` refusal frame — refused for asking
+   *  too fast rather than for being over budget. Rendered as a notice too. */
+  rateLimited: string | null
   isStreaming: boolean
-  start: () => void
+  start: (scope: SynthesisScope) => void
   abort: () => void
 }
 
-export function useSSE(url: string): UseSSEReturn {
-  const [text, setText] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [quota, setQuota] = useState<string | null>(null)
-  const [isStreaming, setIsStreaming] = useState(false)
-  const sourceRef = useRef<EventSource | null>(null)
+/**
+ * Streams the synthesis over `POST /stream/synthesis`.
+ *
+ * This used to be an `EventSource` hook — hence the name — which made it a GET,
+ * and a GET carrying the `SameSite=Lax` session cookie is reachable by
+ * cross-site navigation: any page could spend a logged-in user's LLM budget (or
+ * a BYO-key user's own key, since key-holders are quota-exempt). It now runs on
+ * the shared `usePostStream` client alongside `useChatStream`; the scope that
+ * used to be a query string is the POST body. The only stream-specific thing
+ * left is which endpoint and what to send, so this hook registers no named-frame
+ * handlers — the refusal frames are handled for every stream by the client.
+ */
+export function useSSE(): UseSSEReturn {
+  const { text, error, quota, rateLimited, isStreaming, start: post, abort } = usePostStream()
 
-  const abort = useCallback(() => {
-    sourceRef.current?.close()
-    sourceRef.current = null
-    setIsStreaming(false)
-  }, [])
+  const start = useCallback(
+    (scope: SynthesisScope) => {
+      post(synthesisUrl(), scope)
+    },
+    [post],
+  )
 
-  const start = useCallback(() => {
-    sourceRef.current?.close()
-    setText('')
-    setError(null)
-    setQuota(null)
-    setIsStreaming(true)
-
-    // withCredentials is EventSource's spelling of `credentials: 'include'` —
-    // the synthesis stream is auth-gated, so the session cookie must ride along.
-    const es = new EventSource(url, { withCredentials: true })
-    sourceRef.current = es
-
-    es.onmessage = (event: MessageEvent<string>) => {
-      if (event.data === '[DONE]') {
-        es.close()
-        sourceRef.current = null
-        setIsStreaming(false)
-        return
-      }
-      try {
-        // Backend JSON-encodes each token to safely carry newlines over SSE
-        const token = JSON.parse(event.data) as string
-        setText((prev) => prev + token)
-      } catch {
-        setText((prev) => prev + event.data)
-      }
-    }
-
-    // Named events bypass onmessage — the quota refusal frame needs its own
-    // listener. The frame is followed by a normal [DONE], which closes us.
-    es.addEventListener('quota', (event: MessageEvent<string>) => {
-      try {
-        const payload = JSON.parse(event.data) as { message?: string }
-        setQuota(payload.message ?? 'Daily LLM budget reached.')
-      } catch {
-        setQuota('Daily LLM budget reached.')
-      }
-    })
-
-    es.onerror = () => {
-      es.close()
-      sourceRef.current = null
-      setIsStreaming(false)
-      setError('Stream connection failed.')
-    }
-  }, [url])
-
-  return { text, error, quota, isStreaming, start, abort }
+  return { text, error, quota, rateLimited, isStreaming, start, abort }
 }

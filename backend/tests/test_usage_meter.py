@@ -167,7 +167,7 @@ def test_synthesis_bills_the_logged_in_user(client, me, add_entry, monkeypatch):
 
     monkeypatch.setattr(synthesis, "stream_text", fake_stream)
 
-    resp = client.get("/stream/synthesis", params={"days": 0, "limit": 5})
+    resp = client.post("/stream/synthesis", json={"days": 0, "limit": 5})
 
     assert resp.status_code == 200
     assert seen["user_id"] == me.id

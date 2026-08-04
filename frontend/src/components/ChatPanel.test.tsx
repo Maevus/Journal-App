@@ -10,6 +10,7 @@ const chat = vi.hoisted(() => ({
   sources: [] as Citation[],
   error: null as string | null,
   quota: null as string | null,
+  rateLimited: null as string | null,
   isStreaming: false,
   start: vi.fn(),
   abort: vi.fn(),
@@ -33,6 +34,7 @@ beforeEach(() => {
   chat.sources = []
   chat.error = null
   chat.quota = null
+  chat.rateLimited = null
   chat.isStreaming = false
   chat.start.mockClear()
   chat.abort.mockClear()
@@ -117,13 +119,22 @@ describe('ChatPanel', () => {
   })
 })
 
-describe('ChatPanel quota refusal', () => {
+describe('ChatPanel refusal frames', () => {
   it('shows a friendly notice, not the error alert, when a turn is refused', () => {
     // After an over-budget turn: the question is pending, no answer text came.
     chat.quota = 'daily LLM budget exhausted'
     render(<ChatPanel />)
     ask('how was May?')
-    expect(screen.getByText(/budget/i)).toBeInTheDocument()
+    // The backend's own wording is rendered — it knows the budget and reset time.
+    expect(screen.getByText('daily LLM budget exhausted')).toBeInTheDocument()
     expect(screen.queryByRole('alert')).toBeNull() // a refusal is not an error
+  })
+
+  it('shows the rate-limit refusal as a notice too', () => {
+    chat.rateLimited = 'Too many requests. Try again in 30 seconds.'
+    render(<ChatPanel />)
+    ask('how was May?')
+    expect(screen.getByRole('status')).toHaveTextContent('Try again in 30 seconds')
+    expect(screen.queryByRole('alert')).toBeNull() // slowing down is not a failure
   })
 })

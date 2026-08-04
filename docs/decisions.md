@@ -648,5 +648,45 @@ by construction.
   pinning precisely: `check_quota` fails closed, so a broken lock statement would
   not have loosened the gate, it would have refused every LLM call in the app.
 
-Still open before `PUBLIC_DEMO=1`: finding #5, rate limiting (none anywhere, and
-`/stream/synthesis` is a `GET` reachable cross-site under `SameSite=Lax`).
+## Synthesis over POST, and one streaming client (2026-08-04)
+
+- **`GET /stream/synthesis` was CSRF-reachable, and it spends money.** The session
+  cookie is `SameSite=Lax`, which the browser sends on a top-level cross-site GET,
+  and CORS only stops a third party *reading* a response — it never stops the
+  server *processing* the request. So any page could point a link or an iframe at
+  the endpoint and burn a logged-in user's daily budget; a BYO-key user, who is
+  quota-exempt by design (F4), would have been spending their own Anthropic key,
+  and neither would ever see it happen. Now `POST /stream/synthesis` with the
+  scope (`limit`/`days`/`source`) as a JSON body: that is not a CORS "simple
+  request", so the browser must preflight, and the `FRONTEND_URL` allow-list
+  already refuses the preflight. The scope moved into the *body* deliberately —
+  a form-encoded POST would still be simple, and simple means no preflight. A CSRF
+  token was rejected: a second secret to mint, store and rotate for a guarantee
+  the method boundary already gives. A test pins that GET now 405s.
+- **The two streaming transports converged instead of diverging.** ADR 0001's
+  "synthesis stays GET+EventSource" half is superseded there. `useChatStream`
+  already had a complete POST+fetch SSE client hidden inside it; the reader loop
+  and frame parser are now `hooks/usePostStream.ts`, taking a per-event handler
+  map, and both hooks are thin shells on it — chat registers a `sources` handler,
+  synthesis registers none. The refusal frames are protocol rather than per-stream
+  payload, so the shared client owns them for everyone.
+- **Free from the transport change**: `reportIfAuthExpired` on the synthesis
+  stream (a mid-session 401 now flips to the login gate instead of reading as
+  "Stream connection failed" — `EventSource` exposes no status code, so this was
+  previously impossible), and "Stop generating" aborting on the wire rather than
+  just closing the reader. The one loss, `EventSource`'s auto-reconnect, cost
+  nothing: `useSSE` already closed the connection in `onerror`.
+- **`event: rate_limited` handled ahead of the limiter that emits it** — same
+  shape as the quota frame (`{code, message, retry_after}` inside a 200 stream),
+  built into the shared client against the agreed wire contract so the frontend
+  is ready when the backend rate limiting lands. Rendered as a gold
+  `role="status"` notice like quota, never the red error banner: being asked to
+  slow down is an answer, not a failure.
+- **Both panels now render the server's refusal message.** They had been
+  hardcoding their own copy and ignoring `quota.message` — including a stale
+  "Bring-your-own-key support is coming soon" line, months after BYO shipped.
+  The backend knows the actual budget, tier and retry window; the panel doesn't.
+- **`useSSE` keeps its name** though it is no longer EventSource-specific and both
+  streams are SSE now. Renaming it to `useSynthesisStream` (the honest pairing
+  with `useChatStream`) is a clean follow-up, deliberately not bundled into a
+  security fix.

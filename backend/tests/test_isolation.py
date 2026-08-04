@@ -129,7 +129,7 @@ READ_ROUTES = [
     ("get", "/trends", {"params": {"days": 30}}),
     ("post", "/search", {"json": {"query": "anything", "limit": 5}}),
     ("get", "/export", {"params": {"format": "json"}}),
-    ("get", "/stream/synthesis", {"params": {"days": 0, "limit": 5}}),
+    ("post", "/stream/synthesis", {"json": {"days": 0, "limit": 5}}),
     ("post", "/stream/chat", {"json": {"messages": [{"role": "user", "content": "hi"}]}}),
 ]
 
@@ -210,7 +210,7 @@ def test_synthesis_prompt_only_sees_your_entries(client, login, add_entry, monke
     bob = login("bob@example.com")
     add_entry("BOB_NOTE", user_id=bob.id, timestamp=datetime(2026, 5, 11))
 
-    r = client.get("/stream/synthesis", params={"days": 0, "limit": 5})
+    r = client.post("/stream/synthesis", json={"days": 0, "limit": 5})
 
     assert r.status_code == 200
     assert "BOB_NOTE" in seen["prompt"]

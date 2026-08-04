@@ -16,14 +16,17 @@ Full-stack personal journal analytics app: React SPA + FastAPI backend.
     ingestion.py            — Hash-deduplicated ingest + background mood scoring
   routers/
     ingest.py               — POST /ingest
-    synthesis.py            — GET /stream/synthesis  (SSE); in-memory LRU cache keyed on the rendered prompt, so identical requests skip the LLM call
+    synthesis.py            — POST /stream/synthesis (SSE); POST so a paid LLM call isn't reachable by cross-site navigation (ADR 0001). In-memory LRU cache keyed on the rendered prompt, so identical requests skip the LLM call
     search.py               — POST /search  (hybrid BM25 + pgvector)
     trends.py               — GET /trends
   prompts/synthesis_v1.yaml — Versioned system + user prompt template
 
 /frontend/src
   api/client.ts             — All fetch calls, base URL from VITE_API_BASE_URL
-  hooks/useSSE.ts           — EventSource hook with start/abort control
+  hooks/usePostStream.ts    — Shared POST+fetch SSE client: reader loop, frame parser,
+                              quota/rate_limited refusal frames, abort. Both streams run on it
+  hooks/useSSE.ts           — Synthesis stream (name predates the POST move)
+  hooks/useChatStream.ts    — Chat stream; registers the `sources` frame handler
   hooks/useTrends.ts        — Fetches /trends, cancellable on unmount
   components/
     StreamingPanel.tsx      — SSE rendering, "Stop generating" abort, error state
@@ -75,7 +78,7 @@ Tailwind v4 is configured via `@import "tailwindcss"` in `index.css` and the `@t
 
 TypeScript strict flags are on (`noUnusedLocals`, `noUnusedParameters`, `erasableSyntaxOnly`) — unused symbols break the build.
 
-Tests use Vitest + Testing Library (jsdom) — config lives in `vite.config.ts` (`test` block) with `src/test/setup.ts` for jest-dom matchers. `*.test.ts(x)` files are excluded from `tsc -b` (see `tsconfig.app.json`) so the production build stays test-free. Covered: `api/client.ts`, the `useSSE`/`useTrends` hooks (EventSource/fetch mocked), and the `DayDetail`/`StreamingPanel` components. Untested so far: `MoodChart`, `SearchPanel`, the selectors, `App`.
+Tests use Vitest + Testing Library (jsdom) — config lives in `vite.config.ts` (`test` block) with `src/test/setup.ts` for jest-dom matchers. `*.test.ts(x)` files are excluded from `tsc -b` (see `tsconfig.app.json`) so the production build stays test-free. Covered: `api/client.ts`, the `useSSE`/`useChatStream`/`useTrends` hooks (`fetch` + a `ReadableStream` body mocked), and the `DayDetail`/`StreamingPanel`/`ChatPanel` components. Untested so far: `MoodChart`, `SearchPanel`, the selectors, `App`.
 
 ## Key design decisions
 

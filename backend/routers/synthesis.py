@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from sqlmodel import Session
 
 from clock import utcnow_naive
@@ -62,34 +63,57 @@ def _cache_put(key: str, text: str) -> None:
         _CACHE.popitem(last=False)  # evict least-recently-used
 
 
-@router.get("/synthesis")
+class SynthesisRequest(BaseModel):
+    """The synthesis scope, carried in the request body rather than the query
+    string — see the route docstring for why this is a POST at all."""
+
+    limit: int = 20
+    days: int = 0  # calendar window; 0 = all time
+    source: str | None = None  # "google_keep" | "goodnotes" | "text"; None = all
+
+
+@router.post("/synthesis")
 async def synthesis(
-    limit: int = 20,
-    days: int = 0,  # calendar window; 0 = all time
-    source: str | None = None,  # "google_keep" | "goodnotes" | "text"; None = all
+    body: SynthesisRequest,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
+    """Stream a synthesis of the user's entries as SSE.
+
+    POST, and deliberately so: as a GET this was a paid Opus call reachable by
+    cross-site navigation. The session cookie is `SameSite=Lax`, which the
+    browser *does* send on a top-level cross-site GET, and CORS never stops the
+    request being processed — only the response being read. So a third-party
+    page could burn a logged-in user's daily budget by pointing an iframe or a
+    link at this route, and a BYO-key user (quota-exempt by design, F4) would
+    have been spending on their own Anthropic key.
+
+    A POST whose body is `application/json` is not a CORS "simple request": the
+    browser must preflight it, and the allow-list in `main.py` (config.FRONTEND_URL
+    only) refuses that preflight, so a cross-site caller never reaches this
+    handler. The scope moves into the body for the same reason — a form-encoded
+    POST would be simple, and simple means no preflight.
+    """
     query = user_entries(user.id).order_by(JournalEntry.timestamp.asc())
-    if days > 0:
+    if body.days > 0:
         # naive UTC to match JournalEntry.timestamp (stored naive); an aware
         # datetime would break the >= comparison. See clock.utcnow_naive.
-        cutoff = utcnow_naive() - timedelta(days=days)
+        cutoff = utcnow_naive() - timedelta(days=body.days)
         query = query.where(JournalEntry.timestamp >= cutoff)
-    if source:
-        query = query.where(JournalEntry.source == source)
+    if body.source:
+        query = query.where(JournalEntry.source == body.source)
     entries = list(session.exec(query).all())
 
     # Sample evenly across the window so long ranges reflect the whole period
     # rather than just the `limit` most recent entries.
-    if len(entries) > limit:
-        step = len(entries) / limit
-        entries = [entries[int(i * step)] for i in range(limit)]
+    if len(entries) > body.limit:
+        step = len(entries) / body.limit
+        entries = [entries[int(i * step)] for i in range(body.limit)]
 
     cfg = _load_prompt()
 
     if entries:
-        period = f"the last {days} days" if days > 0 else "all time"
+        period = f"the last {body.days} days" if body.days > 0 else "all time"
         entries_text = (
             f"(Entries spanning {period}, in chronological order.)\n\n"
             + "\n---\n".join(
