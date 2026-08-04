@@ -37,6 +37,10 @@ def upgrade() -> None:
     # Isolation filter (search_similar always scopes WHERE user_id).
     op.execute("CREATE INDEX ix_entry_embeddings_user_id ON entry_embeddings (user_id)")
     # ANN index for cosine distance (<=>), matching search_similar's operator.
+    # Covers `embedding` only. Every search also filters on user_id, which this
+    # index cannot express, so the filter is applied to whatever the scan already
+    # returned — see the _ITERATIVE_SCAN note in services/embeddings.py for why
+    # that needs pgvector >= 0.8 to be correct rather than merely lucky.
     op.execute(
         "CREATE INDEX ix_entry_embeddings_hnsw ON entry_embeddings "
         "USING hnsw (embedding vector_cosine_ops)"

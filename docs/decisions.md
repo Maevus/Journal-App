@@ -797,3 +797,44 @@ never becoming a wildcard or a permissive regex** — nothing would fail if it d
 
 With finding #4 (quota reservation) and both halves of #5 landed, the two gates
 named in the 2026-07-29 review as blocking `PUBLIC_DEMO=1` are closed.
+
+## ANN recall under a per-user filter (2026-08-04)
+
+Finding #11, and the only one on the list that breaks a user-visible feature with
+no error at all. `search_similar` filters `WHERE user_id`, but the HNSW index
+covers `embedding` alone — it cannot express the filter, so an index scan walks
+the globally nearest vectors and the owner check is applied to whatever came
+back. A user whose entries fall outside that candidate set gets fewer rows than
+they asked for, or none, and an empty result is indistinguishable from "nothing
+matched".
+
+- **It is invisible until it isn't.** Below a few thousand rows the planner sorts
+  a btree scan on `user_id` instead and recall is perfect. The ANN plan only wins
+  once the table is large — so this ships working, stays working through every
+  test and demo, and then degrades on the day the corpus crosses over, for
+  whoever is *not* the heaviest user. Measured against the live DB earlier: of
+  the global top-40 neighbours, 40 belonged to user 1 and 0 to the demo user.
+- **Fixed with `hnsw.iterative_scan` (pgvector 0.8+)**, set per query via
+  `SET LOCAL` inside a transaction so nothing leaks back to the pool. The scan
+  continues until `limit` rows actually survive the filter. **`strict_order`, not
+  `relaxed_order`**: `search_similar` promises most-similar-first and
+  `hybrid_search` fuses on the scores, so approximate ordering would corrupt the
+  ranking rather than merely shuffle it.
+- **Rejected: raising `ef_search`.** It buys headroom, not correctness — the
+  candidate set is still fixed, so the same failure returns at a larger corpus,
+  and every query pays the cost whether it needs it or not.
+- **Rejected: a partial index per user, and table partitioning.** The first does
+  not scale past a handful of users; the second is the right answer at a size
+  this app is nowhere near, and a lot of machinery to maintain until then.
+- **This raises the deploy bar**: pgvector must now be **>= 0.8** on the managed
+  host, recorded in the `.env.example` manifest with the query to check it. An
+  older extension rejects the `SET` and search fails loudly. That is deliberate —
+  the failure it replaces was silent, and a loud one is discoverable.
+- **The tests force the ANN plan rather than waiting for it.**
+  `enable_sort=off` leaves the ordered index scan as the only way to satisfy the
+  ORDER BY and a small `ef_search` bounds the candidate set, so 200 rows
+  reproduce what production reaches at scale. Vectors are hand-placed rather than
+  embedded — the tests are about index geometry, and "this user's entries are
+  nowhere near the query" is not something real text expresses reliably. Teeth
+  checked: with iterative scan off, the crowded-index test returns `[]` and the
+  ordering test returns nothing to order.

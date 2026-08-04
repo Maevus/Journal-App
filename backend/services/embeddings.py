@@ -28,6 +28,29 @@ logger = logging.getLogger(__name__)
 _MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 _embedder = None
 
+# How the ANN index behaves when the query also filters (it always does — every
+# search is scoped to one user).
+#
+# The HNSW index covers `embedding` alone, so a plain index scan walks the
+# GLOBALLY nearest vectors and `WHERE user_id` then discards whatever isn't
+# ours. Nothing makes the scan go back for more, so a user whose entries sit
+# outside that candidate set gets fewer rows than they asked for — or none at
+# all, which is indistinguishable from "nothing matched". Small tables hide this
+# completely: the planner sorts a btree scan instead and recall is perfect right
+# up until the corpus grows enough to prefer the ANN plan, at which point search
+# quietly stops working for everyone but the heaviest user.
+#
+# Iterative scan (pgvector 0.8+) is the fix: the scan keeps going until `limit`
+# rows actually survive the filter. `strict_order` rather than `relaxed_order`
+# because search_similar promises most-similar-first and hybrid_search fuses on
+# these scores — approximately-ordered results would corrupt the ranking rather
+# than just reorder it.
+#
+# Requires pgvector >= 0.8. On an older extension this SET raises rather than
+# silently degrading, which is deliberate: a loud failure is discoverable, and
+# the bug it replaces is not.
+_ITERATIVE_SCAN = "strict_order"
+
 
 def _on_postgres() -> bool:
     return engine.dialect.name == "postgresql"
@@ -91,7 +114,10 @@ def search_similar(query: str, limit: int = 10, *, user_id: int) -> List[Tuple[i
     if not _on_postgres():
         return []
     q = _to_pgvector(_embed(query))
-    with engine.connect() as conn:
+    # A transaction purely so SET LOCAL is scoped to this query and reverts on
+    # exit — the connection goes back to the pool with no setting left on it.
+    with engine.begin() as conn:
+        conn.execute(text(f"SET LOCAL hnsw.iterative_scan = {_ITERATIVE_SCAN}"))
         rows = conn.execute(
             text(
                 "SELECT entry_id, 1 - (embedding <=> (:q)::vector) AS similarity "
