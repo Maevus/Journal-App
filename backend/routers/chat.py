@@ -14,6 +14,12 @@ from models.user import User
 from services.auth import get_current_user
 from services.llm_client import resolve_model, stream_text
 from services.quota import QuotaExceededError, sse_quota_frame
+from services.rate_limit import (
+    TIER_CHAT,
+    RateLimitDecision,
+    rate_limited_stream,
+    stream_rate_limit,
+)
 from services.retrieval import (
     condense_query,
     hybrid_search,
@@ -66,6 +72,7 @@ async def chat(
     body: ChatRequest,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
+    limit: RateLimitDecision = Depends(stream_rate_limit(TIER_CHAT)),
 ):
     """Multi-turn RAG over the whole journal. The client holds the conversation
     and POSTs the full message history each turn; the server stays stateless.
@@ -76,6 +83,13 @@ async def chat(
     the text, a single `event: sources` frame carries the numbered entries so the
     frontend can render clickable citation chips. Chat ignores the global
     range/source filters — a question defines its own scope."""
+    # Rate limit: refused before any retrieval or LLM work, because the cost
+    # this bounds is the THREE calls below (condense, date parse, the stream).
+    # A 200 carrying a named frame, not a 429 — EventSource can't read a 4xx
+    # body and would reconnect on it. See services/rate_limit.py.
+    if limit.refused:
+        return rate_limited_stream(limit)
+
     messages = body.messages
     last = messages[-1] if messages else None
     question = last.content.strip() if last and last.role == "user" else ""

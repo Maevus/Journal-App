@@ -14,6 +14,7 @@ from sqlmodel import Session, SQLModel, create_engine
 import services.ingestion as ingestion
 from models.journal import JournalEntry
 from models.keys import UserApiKey  # noqa: F401 — registers the key table for create_all
+from models.rate_limit import RateLimitCounter  # noqa: F401 — registers the counter table
 from models.usage import LLMUsage  # noqa: F401 — registers the usage table for create_all
 from models.user import User  # noqa: F401 — registers the users table for create_all
 
@@ -117,6 +118,57 @@ def quota_headroom(monkeypatch):
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 100.0)
     monkeypatch.setattr(config, "DEMO_DAILY_USD", 100.0)
     monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 10_000.0)
+
+
+@pytest.fixture(autouse=True)
+def rate_limit_headroom(monkeypatch):
+    """The shipped limits are tight on purpose (chat is 5/min), which several
+    route tests would trip just by making a handful of requests. Give every tier
+    generous headroom so the limiter only bites where a test sets a budget
+    explicitly — the same opt-in stance `quota_headroom` takes, and for the same
+    reason: a test failing on a limit it never mentioned is a mystery.
+
+    Headroom rather than 0 (which disables a window entirely), so the limiter's
+    real code path — the upsert, the decision — still runs under every route
+    test rather than being switched off for the whole suite.
+    """
+    import config
+
+    for tier in ("CHAT", "SYNTHESIS", "INGEST", "KEYS", "SEARCH", "AUTH"):
+        monkeypatch.setattr(config, f"RATE_LIMIT_{tier}_PER_MIN", 10_000)
+        monkeypatch.setattr(config, f"RATE_LIMIT_{tier}_PER_HOUR", 10_000)
+
+
+@pytest.fixture(autouse=True)
+def _frozen_rate_limit_clock(monkeypatch):
+    """Pin the limiter's clock for the suite.
+
+    The windows are floored to the wall clock, so a test that sends two requests
+    expecting the second to be refused fails whenever the pair straddles a minute
+    boundary — roughly once every few hundred runs, and only ever on someone
+    else's machine. Freezing it makes the boundary a thing tests choose (by
+    passing `now` explicitly) rather than a thing they race.
+
+    Scoped to `services.rate_limit` only: session expiry and the quota gate read
+    their own `utcnow_naive`, and those tests want the real clock.
+    """
+    import services.rate_limit as rate_limit
+    from datetime import datetime
+
+    frozen = datetime(2026, 8, 4, 10, 30, 12)
+    monkeypatch.setattr(rate_limit, "utcnow_naive", lambda: frozen)
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_sweep():
+    """The counter sweep is throttled by a module-level timestamp (a per-process
+    constant in prod). Tests inject their own `now`, so a stamp left by one test
+    would decide whether another's sweep runs — clear it around each."""
+    import services.rate_limit as rate_limit
+
+    rate_limit._last_swept = None
+    yield
+    rate_limit._last_swept = None
 
 
 @pytest.fixture

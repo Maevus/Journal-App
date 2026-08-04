@@ -13,6 +13,7 @@ from services.ingestion import (
     ingest_keep,
     score_mood_background,
 )
+from services.rate_limit import TIER_INGEST, rate_limit
 
 router = APIRouter()
 
@@ -22,7 +23,10 @@ class IngestRequest(BaseModel):
     source: str = "text"
 
 
-@router.post("")
+# The most expensive non-LLM route in the app: a GoodNotes post OCRs every page
+# of the PDF inline, and every accepted entry queues a background mood-scoring
+# LLM call that the quota gate sees only once it runs.
+@router.post("", dependencies=[Depends(rate_limit(TIER_INGEST))])
 async def ingest(
     background_tasks: BackgroundTasks,
     source: Optional[str] = Query(

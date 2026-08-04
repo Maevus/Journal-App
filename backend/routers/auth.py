@@ -37,10 +37,18 @@ from services.auth import (
     is_demo_user,
     revoke_session,
 )
+from services.rate_limit import TIER_AUTH, rate_limit
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# Both legs of the handshake are throttled, per IP rather than per session — the
+# whole point of logging in is that the caller hasn't got a session yet, so
+# there is nothing else to key on. Throttling only the callback would leave the
+# outbound leg as a free redirect amplifier, and the callback alone is the
+# guessing surface for a stolen `code` (security checklist §5).
+_LOGIN_RATE_LIMIT = Depends(rate_limit(TIER_AUTH, by_ip_only=True))
 
 oauth = OAuth()
 oauth.register(
@@ -56,14 +64,14 @@ oauth.register(
 )
 
 
-@router.get("/login")
+@router.get("/login", dependencies=[_LOGIN_RATE_LIMIT])
 async def login(request: Request):
     """Kick off the flow: redirect the browser to Google's consent screen."""
     redirect_uri = request.url_for("callback")
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
-@router.get("/callback")
+@router.get("/callback", dependencies=[_LOGIN_RATE_LIMIT])
 async def callback(request: Request, db: Session = Depends(get_session)):
     """Google's return leg: code → verified identity → our session cookie."""
     try:

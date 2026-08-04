@@ -14,6 +14,8 @@ Full-stack personal journal analytics app: React SPA + FastAPI backend.
     llm_client.py           — Anthropic wrapper: async streaming, structured output, retry, cost logging. DEFAULT_MODEL = claude-opus-4-8 ($5/$25 per 1M); model + pricing become per-user config once users bring their own key
     embeddings.py           — pgvector store: embed_and_store, search_similar (fastembed MiniLM-384; Postgres-only, no-ops off PG)
     ingestion.py            — Hash-deduplicated ingest + background mood scoring
+    client_ip.py            — The trust boundary: the ONE place the app decides who the caller is (TRUSTED_PROXY_IPS)
+    rate_limit.py           — Per-identity fixed-window limits; named tiers, DB-backed counters, route dependencies
   routers/
     ingest.py               — POST /ingest
     synthesis.py            — GET /stream/synthesis  (SSE); in-memory LRU cache keyed on the rendered prompt, so identical requests skip the LLM call
@@ -49,6 +51,8 @@ Tests live in `backend/tests/` (pytest + pytest-asyncio + pytest-cov, `asyncio_m
 Database: **Postgres** in real mode (ADR 0003 — the multi-user engine), SQLite for tests + demo. `engine` and `get_session` live in `models/journal.py`; the engine's connect args branch on the URL scheme (`check_same_thread`/`pool_pre_ping`). Point the app at Postgres via `DATABASE_URL=postgresql+psycopg://…` (see `.env.example`); a local server is `docker compose up -d db` (`backend/docker-compose.yml`, `pgvector/pgvector:pg18-trixie` — Postgres 18 + pgvector). **Schema is managed by Alembic** (`backend/alembic/`) — `alembic upgrade head`, and the app also self-migrates on startup (`main._run_migrations`). One-time SQLite→Postgres data copy: `scripts/migrate_sqlite_to_pg.py` (preserves ids); embeddings are (re)built by `scripts/embed_backfill.py` into the pgvector `entry_embeddings` table. Deferred to the hardening phase: RLS + KMS envelope.
 
 SSE format: each token is JSON-encoded (`json.dumps(token)`) so newlines survive the `data: …\n\n` SSE frame. The frontend `JSON.parse`s each event.
+
+**Rate limiting** (`services/rate_limit.py`, decisions.md 2026-08-04): per-identity fixed-window counters in the DB (`rate_limit_counters`), incremented with one `INSERT … ON CONFLICT … RETURNING` — so unlike the quota gate it needs no lock. Applied as **route dependencies, not middleware** (middleware lands outside `CORSMiddleware` and its 429s lose the CORS header). Named tiers, all env-tunable (`RATE_LIMIT_*`); cheap reads including `/trends` (the Docker healthcheck) are exempt. The two SSE routes refuse with an `event: rate_limited` frame inside a 200, like the existing `event: quota` frame. Anonymous callers key on IP via `services/client_ip.py` — which is only trustworthy if **`TRUSTED_PROXY_IPS`** matches the deployment (the Dockerfile passes the same value to uvicorn's `--forwarded-allow-ips`; it is no longer `*`).
 
 Mood scoring is a FastAPI `BackgroundTask` — it fires after ingest returns and calls `services/llm_client.py:structured_output`. Failures are silently swallowed.
 
