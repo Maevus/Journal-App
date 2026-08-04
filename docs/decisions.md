@@ -602,3 +602,51 @@ branch** — reviewing per branch would have re-reviewed the datepicker four tim
 Known and accepted for now: the quota gate is still read-then-act (20 concurrent
 requests passed a $1 budget and spent $11), and there is no rate limiting anywhere.
 `GLOBAL_DAILY_USD` is the only hard stop. Both must be fixed before `PUBLIC_DEMO=1`.
+
+## Quota reservation — closing the read-then-act race (2026-08-04)
+
+Finding #4 from the branch review. The gate summed today's spend, closed the
+session, then compared — so N callers arriving together all measured the same
+meter and all passed. The meter is the wrong thing to measure alone: a row only
+exists once a call has *finished*, so an in-flight call is invisible to the gate
+by construction.
+
+- **The gate reserves, it doesn't just read.** An admitted call writes a
+  `QuotaReservation` row in the same serialized transaction as the sums, so the
+  next checker counts it immediately. `llm_client` settles the claim against the
+  real cost when the call ends.
+- **The comparison did not change.** Reservations are added to the *sum*, not to
+  the threshold, so `spent >= budget` keeps every existing semantic — including
+  the load-bearing `>=` that makes a $0 budget refuse at $0 spent. Every
+  pre-existing quota test passed untouched, which is the evidence for that claim.
+- **Reservations are the call's worst case** (input estimate + `max_tokens` at the
+  model's output price), because the gate has to commit to a number before any
+  token exists. Erring high is the safe direction; the difference is refunded on
+  settle, so the over-claim only lasts the call. This bounds a burst at
+  `budget + one estimate` instead of the previous `budget × N`.
+- **Serialized twice, for two different deployments.** A process-wide
+  `threading.Lock` covers threads in one worker; `pg_advisory_xact_lock` covers
+  workers in one Postgres. One global lock rather than per-user: the global cap
+  sums everyone, so it has to serialize globally regardless. SQLite is only ever
+  single-process here (tests + standalone demo), so the in-process lock is
+  sufficient there.
+- **`RESERVATION_TTL` (15 min) bounds a crash.** A worker killed mid-call never
+  releases its claim and nothing can distinguish that from a call still running,
+  so sums ignore rows past the TTL. Without it, stranded claims would accumulate
+  until the budget was permanently unusable.
+- **The usage widget still shows metered spend only**, and its "can't drift from
+  the gate" docstring was corrected rather than its numbers. A reservation is a
+  worst case that's usually refunded; surfacing it would make the widget jump and
+  drop on every call. The cost is that `remaining_usd` reads high while calls are
+  in flight, converging when they settle.
+- **The advisory lock is tested by neutralising the in-process one.** Threads
+  racing inside one pytest process are serialized by `_gate_lock` whether or not
+  the Postgres lock works, so the tests that matter most would have passed over a
+  broken one. `test_the_advisory_lock_alone_holds_the_gate` replaces `_gate_lock`
+  with a `nullcontext` to reproduce the multi-worker shape; with the advisory lock
+  removed it admits 6 of 20, with it exactly 1. That failure mode was worth
+  pinning precisely: `check_quota` fails closed, so a broken lock statement would
+  not have loosened the gate, it would have refused every LLM call in the app.
+
+Still open before `PUBLIC_DEMO=1`: finding #5, rate limiting (none anywhere, and
+`/stream/synthesis` is a `GET` reachable cross-site under `SameSite=Lax`).

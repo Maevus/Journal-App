@@ -7,13 +7,14 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import BaseModel
-from sqlmodel import Session
+from sqlmodel import Session, func, select
 
 import config
 import services.key_store as key_store
 import services.llm_client as llm
 from models.keys import UserApiKey
-from services.quota import QuotaExceededError
+from models.usage import LLMUsage, QuotaReservation
+from services.quota import QuotaExceededError, check_quota
 
 
 # --- fakes for the AsyncAnthropic client -----------------------------------
@@ -342,6 +343,71 @@ async def test_stream_text_refuses_over_budget_before_any_api_call(monkeypatch):
     with pytest.raises(QuotaExceededError):
         [tok async for tok in llm.stream_text("prompt", user_id=1)]
     assert msgs.stream_calls == 0
+
+
+async def test_a_call_in_flight_is_visible_to_the_next_checker(monkeypatch, meter_db):
+    """The gate can only bound a burst if the entry points declare what a call
+    might cost BEFORE making it.
+
+    A call is metered when it ends, so mid-stream the meter is still empty and
+    a second caller checking right then sees a budget nothing has touched. That
+    is the window 20 concurrent calls used to spend $11 against a $1 budget.
+    Asserted from inside the stream, where the meter genuinely shows nothing:
+    free tier is haiku at $5/1M out, so a 100k-token ceiling is a $0.50 worst
+    case — exactly the budget, so the second check must be refused.
+    """
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.50)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["a", "b"]))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+
+    refused_mid_stream = None
+    async for _ in llm.stream_text("prompt", user_id=1, max_tokens=100_000):
+        if refused_mid_stream is not None:
+            continue
+        with Session(meter_db) as s:
+            assert s.exec(select(func.count(LLMUsage.id))).one() == 0, "nothing metered yet"
+        try:
+            check_quota(user_id=1)
+            refused_mid_stream = False
+        except QuotaExceededError:
+            refused_mid_stream = True
+
+    assert refused_mid_stream is True
+
+
+async def test_a_finished_call_releases_what_it_did_not_spend(monkeypatch, meter_db):
+    """The worst case is only charged for the life of the call. Once the stream
+    ends, the real cost is in the meter and the claim must be gone — otherwise
+    one 100k-ceiling call would hold $0.50 of a $1 budget for the whole TTL."""
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 1.0)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["a", "b"]))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+
+    [tok async for tok in llm.stream_text("prompt", user_id=1, max_tokens=100_000)]
+
+    with Session(meter_db) as s:
+        assert s.exec(select(func.count(QuotaReservation.id))).one() == 0
+        assert s.exec(select(func.count(LLMUsage.id))).one() == 1  # metered, not reserved
+
+
+async def test_an_aborted_stream_releases_its_reservation(monkeypatch, meter_db):
+    """The abort path is the one that already leaked money once (the $0-metering
+    bug). A client hanging up mid-stream unwinds the generator, so the release
+    has to ride the same `finally` the partial metering does — otherwise
+    abandoning calls silently locks the budget up for the whole TTL."""
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 1.0)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
+    msgs = _FakeMessages(stream_cm=_FakeTextStream(["a", "b", "c"]))
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+
+    stream = llm.stream_text("prompt", user_id=1, max_tokens=100_000)
+    await stream.__anext__()      # take one token
+    await stream.aclose()         # ...then hang up
+
+    with Session(meter_db) as s:
+        assert s.exec(select(func.count(QuotaReservation.id))).one() == 0
 
 
 async def test_structured_output_refuses_over_budget_before_any_api_call(monkeypatch):

@@ -18,6 +18,7 @@ still reachable:
 """
 import os
 import secrets
+from datetime import timedelta
 
 _MODES = {"real", "demo"}
 
@@ -94,6 +95,15 @@ PUBLIC_DEMO = os.getenv("PUBLIC_DEMO", "0").lower() not in ("0", "false", "no", 
 # real number rather than "unset = uncapped": a kill-switch that defaults to
 # off isn't one.
 GLOBAL_DAILY_USD = float(os.getenv("GLOBAL_DAILY_USD", "5"))
+
+# How long the quota gate counts a reservation (headroom claimed by an LLM call
+# that started but hasn't been metered yet — see models.usage.QuotaReservation).
+# A call that dies between passing the gate and settling leaves its row behind,
+# so this bounds how long that stranded headroom stays out of circulation. It
+# must outlast the slowest legitimate call: too short and a long stream stops
+# protecting the budget it was admitted against, too long and a crash locks the
+# budget up. Streams are capped well under this.
+RESERVATION_TTL = timedelta(minutes=int(os.getenv("RESERVATION_TTL_MINUTES", "15")))
 
 # --- Auth: Sign in with Google (ADR 0003) ---
 # OAuth client credentials from Google Cloud Console → Credentials → OAuth

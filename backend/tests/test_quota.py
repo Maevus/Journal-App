@@ -8,16 +8,17 @@ check_quota(user_id=...) either returns or raises QuotaExceededError.
 Spend rows are seeded through the same in-memory meter DB the autouse
 `meter_db` fixture gives llm_client, so the tests never touch journal.db.
 """
+import threading
 from datetime import timedelta
 
 import pytest
-from sqlmodel import Session
+from sqlmodel import Session, SQLModel, create_engine, select
 
 import config
 from clock import utcnow_naive
 from models.keys import UserApiKey
-from models.usage import LLMUsage
-from services.quota import QuotaExceededError, check_quota
+from models.usage import LLMUsage, QuotaReservation
+from services.quota import QuotaExceededError, check_quota, release_reservation
 
 _UTC_MIDNIGHT = utcnow_naive().replace(hour=0, minute=0, second=0, microsecond=0)
 
@@ -196,6 +197,96 @@ def test_fails_closed_when_the_check_itself_breaks(budget, monkeypatch):
     monkeypatch.setattr(quota, "engine", create_engine("sqlite:////nonexistent/nowhere.db"))
     with pytest.raises(QuotaExceededError):
         check_quota(user_id=1)
+
+
+def test_releasing_a_reservation_returns_the_unspent_headroom(meter_db, budget):
+    """A reservation is the call's worst case, so it must not outlive the call.
+
+    The gate has to commit to a number before the tokens exist, and it commits
+    high. Once the meter holds what the call really cost, the difference has to
+    go back — otherwise a $1 reservation settled by a $0.01 call locks up the
+    budget it over-claimed until the TTL expires it.
+    """
+    budget(1.0)
+    reservation = check_quota(user_id=1, estimated_cost=1.0)
+
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1, estimated_cost=1.0)  # the whole budget is claimed
+
+    # The call ended and cost a cent — the meter now holds the truth, so the
+    # claim is redundant.
+    _spend(meter_db, user_id=1, cost=0.01)
+    release_reservation(reservation)
+
+    check_quota(user_id=1, estimated_cost=0.50)  # must not raise: $0.99 is free
+
+
+def test_a_stranded_reservation_stops_counting_after_the_ttl(meter_db, budget):
+    """A worker killed mid-call never releases its claim, and nothing else can
+    tell that from a call still running. Without an expiry those rows would
+    accumulate until the budget was permanently unusable — so the sums ignore
+    anything older than RESERVATION_TTL, and a crash costs at most that long.
+    """
+    budget(1.0)
+    check_quota(user_id=1, estimated_cost=1.0)
+    with pytest.raises(QuotaExceededError):
+        check_quota(user_id=1, estimated_cost=1.0)
+
+    # The holder died. Age its claim past the TTL.
+    with Session(meter_db) as s:
+        claim = s.exec(select(QuotaReservation)).one()
+        claim.created_at = utcnow_naive() - config.RESERVATION_TTL - timedelta(seconds=1)
+        s.add(claim)
+        s.commit()
+
+    check_quota(user_id=1, estimated_cost=1.0)  # must not raise: the budget is free again
+
+
+@pytest.fixture
+def concurrent_meter_db(monkeypatch, tmp_path):
+    """A meter DB the gate can be raced against.
+
+    `meter_db` hands every session ONE connection (StaticPool on `sqlite://`),
+    which 20 threads hammering it segfaults — and a single shared connection
+    can't reproduce the contention the gate has to survive anyway. File-backed
+    SQLite gives each thread a real connection, the shape production has.
+    """
+    import services.quota as quota
+
+    eng = create_engine(f"sqlite:///{tmp_path}/meter.db")
+    SQLModel.metadata.create_all(eng)
+    monkeypatch.setattr(quota, "engine", eng)
+    yield eng
+    eng.dispose()
+
+
+def test_concurrent_checks_cannot_all_pass_one_budget(concurrent_meter_db, budget):
+    """The gate must reserve headroom, not just read it.
+
+    Every checker sums spend that only exists once a call has *finished*, so N
+    callers arriving together all see the same empty meter and all pass — the
+    budget bounds nothing under concurrency. Firing 20 checks at a $1 budget,
+    each declaring it may cost the whole $1, must admit exactly one.
+    """
+    budget(1.0)
+    admitted = []
+    at_the_gate = threading.Barrier(20)
+
+    def attempt():
+        at_the_gate.wait()  # nobody checks until everybody is ready to check
+        try:
+            check_quota(user_id=1, estimated_cost=1.0)
+            admitted.append(1)
+        except QuotaExceededError:
+            pass
+
+    threads = [threading.Thread(target=attempt) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(admitted) == 1
 
 
 def test_check_quota_trusts_the_callers_key_answer(monkeypatch, meter_db):

@@ -15,7 +15,7 @@ import config
 from models.journal import engine
 from models.usage import LLMUsage
 from services import key_store
-from services.quota import QuotaExceededError, check_quota
+from services.quota import QuotaExceededError, check_quota, release_reservation
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -103,9 +103,32 @@ async def key_is_valid(raw_key: str) -> bool:
         return False
 
 
+def _prompt_text(system: str, messages: list[dict]) -> str:
+    """Everything we're about to send as input, flattened for token estimation."""
+    return (system or "") + "".join(
+        m["content"] for m in messages if isinstance(m.get("content"), str)
+    )
+
+
+def _worst_case_cost(model: str, *, prompt_text: str, max_tokens: int) -> float:
+    """The most this call could possibly cost: the input we're sending plus an
+    output that runs all the way to `max_tokens`.
+
+    The quota gate has to claim headroom before a single token exists, so it
+    claims the ceiling. Erring high is the safe direction — the difference is
+    handed back the moment the call ends and the real cost is metered.
+    """
+    input_cost, output_cost = _PRICING.get(model, _DEFAULT_PRICING)
+    return _estimate_tokens(prompt_text) * input_cost + max_tokens * output_cost
+
+
 def _pre_call(
-    model: Optional[str], *, user_id: Optional[int]
-) -> tuple[str, anthropic.AsyncAnthropic]:
+    model: Optional[str],
+    *,
+    user_id: Optional[int],
+    prompt_text: str,
+    max_tokens: int,
+) -> tuple[str, anthropic.AsyncAnthropic, Optional[int]]:
     """The pre-call policy steps both entry points share, on ONE key read.
 
     resolve_api_key is the single "does this user have a key" read; resolve_model
@@ -115,6 +138,10 @@ def _pre_call(
     call we don't make, surfaced as the same refusal type callers already handle
     (the F2 stance; this also turns an APP_ENCRYPTION_KEY misconfiguration into
     a clean refusal instead of a mid-stream 500).
+
+    Returns the reservation id the gate issued, which the caller MUST release
+    when the call ends — the third element exists to make that obligation
+    impossible to overlook at the call site.
     """
     try:
         api_key = resolve_api_key(user_id=user_id)  # F4: own key if set
@@ -125,9 +152,15 @@ def _pre_call(
     # explicit model (task-fixed callers: OCR, date-parse, condense) is honored.
     if model is None:
         model = resolve_model(user_id=user_id, on_own_key=api_key is not None)
-    # The F2 money gate: raises QuotaExceededError before any API traffic.
-    check_quota(user_id=user_id, on_own_key=api_key is not None)
-    return model, _async_client(api_key)
+    # The F2 money gate: raises QuotaExceededError before any API traffic. The
+    # estimate is what makes it hold under concurrency — pricing lives here, so
+    # the gate is handed dollars rather than growing a pricing table of its own.
+    reservation = check_quota(
+        user_id=user_id,
+        on_own_key=api_key is not None,
+        estimated_cost=_worst_case_cost(model, prompt_text=prompt_text, max_tokens=max_tokens),
+    )
+    return model, _async_client(api_key), reservation
 
 
 def _estimate_tokens(text: str) -> int:
@@ -137,7 +170,14 @@ def _estimate_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
-def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Optional[int]) -> None:
+def _log_usage(
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    *,
+    user_id: Optional[int],
+    reservation: Optional[int] = None,
+) -> None:
     """Meter one finished LLM call: operator log line + a persisted LLMUsage row.
 
     Both LLM entry points end here, so this is the spend choke point — an
@@ -145,6 +185,10 @@ def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Op
     write must never kill the call it's metering: the tokens are already
     delivered (and paid for), so a failed INSERT logs loudly and moves on.
     Quota enforcement (F2) fails closed instead — but it runs BEFORE the call.
+
+    Settling the call's `reservation` belongs here, in the same transaction as
+    the row that supersedes it: estimate out, truth in, with no instant where a
+    concurrent checker can see neither.
     """
     input_cost, output_cost = _PRICING.get(model, _DEFAULT_PRICING)
     cost = input_tokens * input_cost + output_tokens * output_cost
@@ -163,9 +207,13 @@ def _log_usage(model: str, input_tokens: int, output_tokens: int, *, user_id: Op
                     cost=cost,
                 )
             )
+            release_reservation(reservation, session=session)
             session.commit()
     except Exception:  # noqa: BLE001
         logger.exception("usage meter write failed (the LLM call itself succeeded)")
+        # The meter row is lost, so the reservation is now the only thing
+        # standing in for this call's spend. Leave it — RESERVATION_TTL retires
+        # it, which errs toward over-counting, the safe direction for a gate.
 
 
 async def stream_text(
@@ -201,7 +249,12 @@ async def stream_text(
     # _pre_call). Runs once per call, not per retry — a retry continues the call
     # already allowed. The one `model` variable then flows to both the API call
     # and _log_usage, so what's billed is always what ran.
-    model, client = _pre_call(model, user_id=user_id)
+    model, client, reservation = _pre_call(
+        model,
+        user_id=user_id,
+        prompt_text=_prompt_text(system, messages),
+        max_tokens=max_tokens,
+    )
     last_err: Exception | None = None
 
     # A client that hangs up mid-stream unwinds this generator at `yield`, so
@@ -215,14 +268,12 @@ async def stream_text(
     delivered: list[str] = []
 
     def _meter_partial() -> None:
-        prompt_text = (system or "") + "".join(
-            m["content"] for m in messages if isinstance(m.get("content"), str)
-        )
         _log_usage(
             model,
-            _estimate_tokens(prompt_text),
+            _estimate_tokens(_prompt_text(system, messages)),
             _estimate_tokens("".join(delivered)),
             user_id=user_id,
+            reservation=reservation,
         )
 
     try:
@@ -240,7 +291,11 @@ async def stream_text(
                         yield chunk
                     msg = await stream.get_final_message()
                     _log_usage(
-                        model, msg.usage.input_tokens, msg.usage.output_tokens, user_id=user_id
+                        model,
+                        msg.usage.input_tokens,
+                        msg.usage.output_tokens,
+                        user_id=user_id,
+                        reservation=reservation,
                     )
                     metered = True
                     return
@@ -259,8 +314,15 @@ async def stream_text(
 
         raise last_err  # type: ignore[misc]
     finally:
+        # Three ways out, and the reservation has to be settled on all of them.
+        # `metered` means _log_usage already released it alongside the real
+        # spend; a started-but-unmetered stream is the abort path, where the
+        # partial metering does the same; a call that never started spent
+        # nothing, so its claim is simply handed back.
         if started and not metered:
             _meter_partial()
+        elif not metered:
+            release_reservation(reservation)
 
 
 async def structured_output(
@@ -280,7 +342,12 @@ async def structured_output(
     `user_id`: required keyword-only billing attribution — see stream_text.
     """
     # One key read serves all three pre-call policy steps — see _pre_call.
-    model, client = _pre_call(model, user_id=user_id)
+    model, client, reservation = _pre_call(
+        model,
+        user_id=user_id,
+        prompt_text=(system or "") + prompt,
+        max_tokens=max_tokens,
+    )
     tool_name = "structured_extract"
     tool_def = {
         "name": tool_name,
@@ -288,37 +355,50 @@ async def structured_output(
         "input_schema": output_schema.model_json_schema(),
     }
 
-    for attempt in range(max_retries):
-        try:
-            response = await client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=[{"role": "user", "content": prompt}],
-                tools=[tool_def],
-                tool_choice={"type": "tool", "name": tool_name},
-            )
-            _log_usage(
-                model, response.usage.input_tokens, response.usage.output_tokens, user_id=user_id
-            )
+    metered = False
+    try:
+        for attempt in range(max_retries):
+            try:
+                response = await client.messages.create(
+                    model=model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=[{"role": "user", "content": prompt}],
+                    tools=[tool_def],
+                    tool_choice={"type": "tool", "name": tool_name},
+                )
+                _log_usage(
+                    model,
+                    response.usage.input_tokens,
+                    response.usage.output_tokens,
+                    user_id=user_id,
+                    reservation=reservation,
+                )
+                metered = True
 
-            for block in response.content:
-                if block.type == "tool_use" and block.name == tool_name:
-                    return output_schema.model_validate(block.input)
+                for block in response.content:
+                    if block.type == "tool_use" and block.name == tool_name:
+                        return output_schema.model_validate(block.input)
 
-            raise ValueError("No tool_use block returned by the model")
+                raise ValueError("No tool_use block returned by the model")
 
-        except _RETRYABLE as exc:
-            if attempt == max_retries - 1:
-                raise
-            delay = 2**attempt
-            logger.warning(
-                "LLM structured attempt %d/%d failed (%s), retrying in %ds",
-                attempt + 1,
-                max_retries,
-                type(exc).__name__,
-                delay,
-            )
-            await asyncio.sleep(delay)
+            except _RETRYABLE as exc:
+                if attempt == max_retries - 1:
+                    raise
+                delay = 2**attempt
+                logger.warning(
+                    "LLM structured attempt %d/%d failed (%s), retrying in %ds",
+                    attempt + 1,
+                    max_retries,
+                    type(exc).__name__,
+                    delay,
+                )
+                await asyncio.sleep(delay)
 
-    raise RuntimeError("structured_output exhausted retries without raising")
+        raise RuntimeError("structured_output exhausted retries without raising")
+    finally:
+        # Exhausted retries and a schema that never validated both leave here
+        # without a metered call — nothing was billed, so hand the claim back
+        # rather than let it sit until the TTL.
+        if not metered:
+            release_reservation(reservation)
