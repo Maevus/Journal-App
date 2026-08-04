@@ -32,3 +32,6 @@ mood_board/
 backend/demo_journal.db
 backend/demo_chroma_db/
 
+
+# Agent worktrees (transient; embedding them as gitlinks breaks clones)
+.claude/worktrees/

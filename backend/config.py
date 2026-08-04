@@ -141,3 +141,56 @@ COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").lower() not in ("0", "false", "n
 # request. Point this at persistent storage, or bake the model into the image at
 # this path (see backend/Dockerfile, which does the latter).
 FASTEMBED_CACHE_DIR = os.getenv("FASTEMBED_CACHE_DIR", "")
+
+# --- Trust boundary: which peers may speak for another caller ---
+# Comma-separated addresses (CIDR ranges allowed) of the reverse proxy or load
+# balancer sitting directly in front of the app. The sole input to
+# services/client_ip.py, which every per-IP rate limit keys on.
+#
+# Unset (the default, and what scripts/dev.sh runs) means "nothing in front of
+# me": the socket peer is the caller and `X-Forwarded-For` — a header anyone on
+# the wire can write — is ignored outright. Set it and the app believes XFF, but
+# only when the request actually arrived from one of these peers.
+#
+# Wrong in either direction, and silently so. Too wide ("*", or a range you
+# don't control) and an attacker forges a fresh XFF per request, giving every
+# request its own bucket and voiding every per-IP limit. Too narrow (unset,
+# behind a load balancer) and the whole internet shares the balancer's address
+# as a single bucket. backend/Dockerfile passes this exact value to uvicorn's
+# --forwarded-allow-ips so the ASGI server and the app cannot disagree about
+# who is allowed to speak for someone else.
+TRUSTED_PROXY_IPS = os.getenv("TRUSTED_PROXY_IPS", "")
+
+# --- Per-identity rate limits (docs/decisions.md, 2026-08-04) ---
+# Requests allowed per fixed window, per caller, per route tier — enforced by
+# services/rate_limit.py. Two windows per tier: the per-minute one bounds a
+# burst, the per-hour one bounds the sustained rate a burst-shaped abuser could
+# otherwise keep up all day by pausing between minutes. 0 disables that window,
+# which is also the per-tier escape hatch if a limit misfires in production;
+# there is deliberately no global off switch, because a global off switch is a
+# thing you leave off.
+#
+# The numbers are budgets for what a request COSTS US, not guesses at
+# politeness:
+#   chat       three LLM calls per request (condense, date parse, the stream),
+#              and Opus for the demo user
+#   synthesis  one LLM call, LRU-cached, so a repeat request is free
+#   ingest     inline OCR per PDF page + a background scoring call per entry
+#   keys       a live Anthropic auth check with no quota gate in front of it,
+#              and a password-guessing surface besides
+#   search     a local ONNX encode — CPU, not money, so the ceiling is higher
+#   auth       the login handshake; always keyed per IP, never per user
+# Cheap reads (/trends, /entries, /usage, /auth/me) carry no limiter at all.
+# /trends in particular is the container HEALTHCHECK every 30s.
+RATE_LIMIT_CHAT_PER_MIN = int(os.getenv("RATE_LIMIT_CHAT_PER_MIN", "5"))
+RATE_LIMIT_CHAT_PER_HOUR = int(os.getenv("RATE_LIMIT_CHAT_PER_HOUR", "40"))
+RATE_LIMIT_SYNTHESIS_PER_MIN = int(os.getenv("RATE_LIMIT_SYNTHESIS_PER_MIN", "10"))
+RATE_LIMIT_SYNTHESIS_PER_HOUR = int(os.getenv("RATE_LIMIT_SYNTHESIS_PER_HOUR", "60"))
+RATE_LIMIT_INGEST_PER_MIN = int(os.getenv("RATE_LIMIT_INGEST_PER_MIN", "5"))
+RATE_LIMIT_INGEST_PER_HOUR = int(os.getenv("RATE_LIMIT_INGEST_PER_HOUR", "30"))
+RATE_LIMIT_KEYS_PER_MIN = int(os.getenv("RATE_LIMIT_KEYS_PER_MIN", "5"))
+RATE_LIMIT_KEYS_PER_HOUR = int(os.getenv("RATE_LIMIT_KEYS_PER_HOUR", "20"))
+RATE_LIMIT_SEARCH_PER_MIN = int(os.getenv("RATE_LIMIT_SEARCH_PER_MIN", "30"))
+RATE_LIMIT_SEARCH_PER_HOUR = int(os.getenv("RATE_LIMIT_SEARCH_PER_HOUR", "0"))
+RATE_LIMIT_AUTH_PER_MIN = int(os.getenv("RATE_LIMIT_AUTH_PER_MIN", "10"))
+RATE_LIMIT_AUTH_PER_HOUR = int(os.getenv("RATE_LIMIT_AUTH_PER_HOUR", "0"))

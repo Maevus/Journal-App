@@ -18,6 +18,12 @@ from models.user import User
 from services.auth import get_current_user
 from services.llm_client import resolve_model, stream_text
 from services.quota import QuotaExceededError, sse_quota_frame
+from services.rate_limit import (
+    TIER_SYNTHESIS,
+    RateLimitDecision,
+    rate_limited_stream,
+    stream_rate_limit,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +83,7 @@ async def synthesis(
     body: SynthesisRequest,
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
+    limit_decision: RateLimitDecision = Depends(stream_rate_limit(TIER_SYNTHESIS)),
 ):
     """Stream a synthesis of the user's entries as SSE.
 
@@ -93,7 +100,18 @@ async def synthesis(
     only) refuses that preflight, so a cross-site caller never reaches this
     handler. The scope moves into the body for the same reason — a form-encoded
     POST would be simple, and simple means no preflight.
+
+    The rate limit below is the other half of the same finding: POST closes the
+    cross-site path, the limiter bounds what a legitimate caller can spend
+    through it.
     """
+    # Rate limit (services/rate_limit.py). A 200 carrying a named frame rather
+    # than a 429, because EventSource can't read a 4xx body — same shape as the
+    # quota refusal below. Checked before the entry query so a refused caller
+    # costs nothing.
+    if limit_decision.refused:
+        return rate_limited_stream(limit_decision)
+
     query = user_entries(user.id).order_by(JournalEntry.timestamp.asc())
     if body.days > 0:
         # naive UTC to match JournalEntry.timestamp (stored naive); an aware

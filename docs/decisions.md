@@ -690,3 +690,110 @@ by construction.
   streams are SSE now. Renaming it to `useSynthesisStream` (the honest pairing
   with `useChatStream`) is a clean follow-up, deliberately not bundled into a
   security fix.
+
+## Per-identity rate limiting (2026-08-04)
+
+Finding #5 from the branch review. Quota bounds what a caller can make us
+*spend*; nothing bounded what they could make us *do*. A signed-out visitor
+could hold `/stream/chat` in a loop — three LLM calls per request — or hammer
+`/keys`, which makes a live Anthropic call with no quota gate anywhere in front
+of it. Both are cheap to write and neither is visible in the meter until after
+the money is gone.
+
+- **The trust boundary came first, because without it nothing else works.**
+  `backend/Dockerfile` ran uvicorn with `--forwarded-allow-ips "*"`, which trusts
+  `X-Forwarded-For` from any peer. With nothing actually in front of the
+  container an attacker sends a fresh address per request, every request lands in
+  its own bucket, and per-IP limits are decorative — silently, with no error
+  anywhere. `TRUSTED_PROXY_IPS` is now one value read by both uvicorn and
+  `services/client_ip.py`, so the ASGI server and the app cannot hold different
+  opinions about who may speak for someone else. `scripts/dev.sh` runs *without*
+  `--proxy-headers`, so the helper had to be correct in both shapes: unset means
+  "nothing in front of me" and the header is never read at all.
+- **Counters in Postgres, not in the process.** A dict keyed on identity is
+  simpler and wrong in the deployment both the Dockerfile and the manifest
+  anticipate: N uvicorn workers each holding their own counters multiply every
+  limit by N, with no symptom until someone leans on it.
+- **One statement, therefore no lock.** The counterpoint to the quota
+  reservation work above. That gate reads a sum, closes the session, then
+  compares — two statements with a window between them, which needed a process
+  lock *and* `pg_advisory_xact_lock` to close. Here the decision and the write
+  are the same statement (`INSERT … ON CONFLICT … DO UPDATE … RETURNING hits`),
+  so the increment *is* the read and there is nothing to serialize. That is not
+  a smaller version of the same defence; it is the reason no defence is needed.
+  Postgres has had that shape since 9.5 and SQLite since 3.24 (`RETURNING` since
+  3.35), which covers the test and standalone-demo path with no dialect branch
+  beyond which `insert` to import.
+- **Two windows per key.** A single fixed window has a boundary burst: a caller
+  spends a full budget just before the boundary and another just after, so the
+  effective short-term rate is double. Adding an hour window blunts that and, more
+  importantly, stops a patient abuser who stays under the minute limit and simply
+  waits out each boundary forever. Windows are checked shortest-first and the
+  check returns on the first refusal, so a client stopped by the minute limit has
+  not also spent an hour slot — otherwise a retry loop, which is exactly what a
+  429 invites, would burn the caller's own hourly budget while being told to wait.
+- **IP is the only discriminator for anonymous traffic.** Under `PUBLIC_DEMO=1`
+  every signed-out visitor resolves to the same demo `User` row, so keying on the
+  user id `get_current_user` returns would give the entire internet one shared
+  bucket and let one abuser rate-limit every other visitor out of the demo. The
+  limiter therefore resolves the session cookie itself: a real session → `user:{id}`,
+  otherwise `ip:{addr}`. Resolving the cookie directly also makes it work on
+  `/auth/login`, where there is no user yet and `get_current_user` would 401.
+- **A BYO-key holder is quota-exempt and rate-limited anyway.** They pay for the
+  tokens; they do not pay for our process, our connection pool or our provider
+  concurrency. The two mechanisms answer different questions and neither
+  substitutes for the other — a $0-budget user is already refused by quota and can
+  still hammer `/search`, which spends CPU on a local ONNX encode and no money.
+- **A route dependency, not middleware — the non-obvious one.** Starlette's
+  `add_middleware` prepends, so a limiter added the natural way in `main.py` lands
+  *outside* `CORSMiddleware` and its 429s ship with no `Access-Control-Allow-Origin`.
+  The browser then discards the response before the SPA can read the status, so a
+  rate limit is indistinguishable from the API being down. A route dependency runs
+  inside the stack; a test asserts the CORS header is on the 429 so this cannot
+  quietly regress.
+- **The streaming routes refuse inside a 200.** `EventSource` cannot read the body
+  of a non-200 and reconnects on its own, so a real 429 reaches the user as a
+  reconnect loop under a generic error with the reason unreadable. This codebase
+  had already solved that shape for quota; the limiter emits the same kind of
+  named frame (`event: rate_limited`, with `code`/`message`/`retry_after`), checked
+  at the top of the handler so a refused chat never makes its three LLM calls.
+  Non-streaming routes get a real 429 with `Retry-After`, which an HTTP client can
+  actually act on.
+- **Fails open, unlike the gate it sits beside.** `check_quota` fails closed
+  because the money is still unspent and refusing costs nothing. A limiter that
+  refuses everything when its table is unreachable is a bigger outage than the
+  abuse it prevents — and every route it guards needs that same database anyway,
+  so a counter store that cannot answer is already a total outage by other means.
+  It logs at `exception` level rather than failing silently.
+- **Cheap reads carry no limiter at all**, not a generous one. `/trends` is the
+  container `HEALTHCHECK` every 30 seconds: throttling it would make the container
+  restart itself under exactly the load it should survive, and even a permissive
+  limit would mean a counter write every 30s forever. A test asserts `/trends`
+  leaves no counter rows at all.
+- **Rejected: a third-party limiter.** `slowapi` / `limits` would have been a
+  dependency (a stop condition) and `slowapi` is middleware-shaped, so it walks
+  straight into the CORS-ordering problem above. **Rejected: a sliding-window log
+  or token bucket.** More accurate at the boundary, but a sliding window wants a
+  row per request and a token bucket wants read-modify-write on a float — both
+  give up the single-statement property that removed the need for a lock.
+  **Rejected: Redis.** The right answer at a scale this app is nowhere near, and
+  a new stateful dependency for an app whose whole deployment story is "one image,
+  one Postgres".
+
+Known and not fixed here: the limiter counts *requests*, not work — one `/ingest`
+post carrying 500 entries is one request, so the ingest tier bounds call
+frequency rather than payload size. `/export` is unlimited — it costs us almost
+nothing to serve, but it streams an entire journal, so a data-egress rate is
+worth a second look before the app is public. And every limited request is a
+write to `rate_limit_counters`; the sweep keeps the table small, but that write
+is the first thing to reconsider if this instance ever gets busy.
+
+Two things this pair of changes does NOT cover, both worth their own work:
+**background LLM fan-out** (`score_mood_background` runs *after* the response, and
+the startup Keep sync and the APScheduler job have no request in front of them at
+all, so no request-scoped limiter can bound any of them — that needs a worker-side
+concurrency cap), and the fact that the CSRF fix **rests on `config.FRONTEND_URL`
+never becoming a wildcard or a permissive regex** — nothing would fail if it did.
+
+With finding #4 (quota reservation) and both halves of #5 landed, the two gates
+named in the 2026-07-29 review as blocking `PUBLIC_DEMO=1` are closed.

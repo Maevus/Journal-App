@@ -15,6 +15,7 @@ from models.user import User
 from services import key_store
 from services.auth import get_current_user, require_writable_user
 from services.llm_client import key_is_valid
+from services.rate_limit import TIER_KEYS, rate_limit
 
 router = APIRouter()
 
@@ -35,7 +36,11 @@ def key_status(
     return {"provider": _PROVIDER, "has_key": key_store.has_user_key(db, user_id=user.id)}
 
 
-@router.post("")
+# Rate limited even though it stores rather than spends: every attempt makes a
+# live outbound call to Anthropic with no quota gate anywhere in front of it, and
+# an unlimited "does this key work?" endpoint is a key-testing oracle for anyone
+# holding a list of stolen keys.
+@router.post("", dependencies=[Depends(rate_limit(TIER_KEYS))])
 async def set_key(
     body: KeyIn,
     user: User = Depends(require_writable_user),

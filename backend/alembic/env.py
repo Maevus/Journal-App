@@ -29,6 +29,7 @@ import config as app_config  # noqa: E402
 # are unused here.
 import models.journal  # noqa: F401,E402
 import models.keys  # noqa: F401,E402
+import models.rate_limit  # noqa: F401,E402
 import models.usage  # noqa: F401,E402
 import models.user  # noqa: F401,E402
 from sqlmodel import SQLModel  # noqa: E402
