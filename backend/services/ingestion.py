@@ -637,8 +637,20 @@ async def ingest_goodnotes(
     folder = Path(os.path.expanduser(raw_path))
 
     if not folder.exists():
-        logger.warning("GoodNotes path does not exist: %s", folder)
-        return {"ingested": 0, "updated": 0, "skipped": 0}, []
+        # A configured-but-absent path is an operator error, not an empty inbox,
+        # and the two used to be indistinguishable: this returned plain zeros, so
+        # a scan over a stale path logged exactly what "no new pages" logs. Google
+        # Drive renaming the export folder ("Notes" → "Notes (1)") stranded the
+        # connector for 7 weeks that way. ERROR + an explicit `error` key so the
+        # scheduled scan and a manual /ingest both say which it is.
+        logger.error(
+            "GoodNotes path does not exist: %s — connector is ingesting NOTHING "
+            "until GOODNOTES_PATH is corrected", folder,
+        )
+        return {
+            "ingested": 0, "updated": 0, "skipped": 0,
+            "error": f"GOODNOTES_PATH does not exist: {folder}",
+        }, []
 
     # OCR spends money, so it's billed to the sync owner (their pages, their
     # budget/key) and quota-gated per call. Resolved once, up front.

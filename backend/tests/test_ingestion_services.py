@@ -246,8 +246,33 @@ async def test_ingest_goodnotes_quota_stops_scan_but_keeps_paid_pages(
 async def test_ingest_goodnotes_missing_folder(session, monkeypatch):
     monkeypatch.setenv("GOODNOTES_PATH", "/no/such/path/xyz")
     stats, entries = await ing.ingest_goodnotes(session)
-    assert stats == {"ingested": 0, "updated": 0, "skipped": 0}
+    assert stats["ingested"] == 0
+    assert stats["updated"] == 0
+    assert stats["skipped"] == 0
     assert entries == []
+    # A stale path must not read as "nothing new" — that ambiguity hid a
+    # 7-week ingestion outage when Drive renamed the export folder.
+    assert "/no/such/path/xyz" in stats["error"]
+
+
+async def test_ingest_goodnotes_recurses_into_subfolders(
+    session, monkeypatch, tmp_path, sync_owner
+):
+    """GOODNOTES_PATH points at the parent folder, so the scan must find the PDF
+    inside Drive's renamed notebook subfolder ("Notes (1)")."""
+    nested = tmp_path / "Notes (1)"
+    nested.mkdir()
+    _write_pdf(nested / "Journal_2026.pdf")
+    monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
+
+    async def fake_ocr(file_bytes, media_type, *, user_id):
+        return "14 Mar 2026\nfound it"
+
+    monkeypatch.setattr(ing, "_ocr_with_claude", fake_ocr)
+
+    stats, entries = await ing.ingest_goodnotes(session)
+    assert stats["ingested"] == 1
+    assert entries[0].external_id == "Journal_2026.pdf#p1"
 
 
 # --- append-aware OCR skip (the regression guard) --------------------------
