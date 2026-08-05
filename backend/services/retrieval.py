@@ -6,6 +6,7 @@ Shared by `/search` and `/chat` so the fusion lives in one place. Returns
 entries paired with their combined score, highest first.
 """
 import logging
+import re
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -32,6 +33,28 @@ logger = logging.getLogger(__name__)
 # window into the ANN query's WHERE (a plain SQL predicate — no Chroma metadata
 # dance), so search_similar itself returns only in-window hits.
 _WINDOWED_SEMANTIC_POOL = 100
+
+# BM25 matches tokens as exact strings, so corpus and query must be split the
+# same way. A bare `.split()` was doing that consistently but kept punctuation
+# attached: the entry "Frustrated, negative, grumpy." tokenised to `grumpy.`,
+# which is a different string from the query token `grumpy` — so the entry
+# scored 0.0 and ranked 241st for the word it is literally about. Any word
+# ending a sentence or preceding a comma was invisible to keyword search.
+#
+# `\w` is Unicode-aware, so accented words (the Spanish in these entries) stay
+# whole. Intra-word apostrophes are kept — "isn't" is one token, not "isn" +
+# "t" — in both the straight and curly forms, since transcribed handwriting
+# carries both.
+_TOKEN_RE = re.compile(r"\w+(?:['’]\w+)*")
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lowercase and split into BM25 terms, discarding punctuation.
+
+    The single source of tokenisation for retrieval: corpus and query MUST go
+    through this same function or they silently stop matching.
+    """
+    return _TOKEN_RE.findall(text.lower())
 
 # A small, fast model is plenty for date extraction + follow-up condensation.
 # These are task-fixed models passed explicitly, so they bypass the per-user
@@ -83,9 +106,9 @@ def hybrid_search(
     )
 
     # --- Keyword search (BM25), normalised to 0-1 ---
-    tokenised_corpus = [e.content.lower().split() for e in entries]
+    tokenised_corpus = [_tokenize(e.content) for e in entries]
     bm25 = BM25Okapi(tokenised_corpus)
-    bm25_raw = bm25.get_scores(query.lower().split())
+    bm25_raw = bm25.get_scores(_tokenize(query))
     bm25_max = max(bm25_raw) if len(bm25_raw) else 0.0
     # BM25 IDF goes negative for terms in >half the docs, so raw scores can be
     # negative. Clamp: a non-positive max or a negative score contributes 0, which

@@ -102,6 +102,32 @@ def test_bm25_surfaces_keyword_without_semantic(session, monkeypatch):
     assert hits[0][0].id == a.id
 
 
+def test_bm25_matches_words_carrying_punctuation(session, monkeypatch):
+    """A word ending a sentence must still match the bare query term.
+
+    `.split()` alone tokenised "grumpy." as a distinct string from "grumpy",
+    so an entry literally about being grumpy scored 0.0 and sank to rank 241
+    in the real journal. Punctuation is stripped at tokenisation now.
+    """
+    a = _add(session, "I feel cruddy awful. Frustrated, negative, grumpy.")
+    # BM25Okapi's IDF is log((N-n+0.5)/(n+0.5)) — exactly 0 for a term in 1 of 2
+    # docs, so the corpus needs enough filler for "grumpy" to read as rare.
+    for i in range(6):
+        _add(session, f"a totally unrelated entry about cycling number {i}")
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [])
+
+    hits = retrieval.hybrid_search(session, "grumpy", 5, user_id=1)
+    assert hits[0][0].id == a.id
+    assert hits[0][1] > 0.0
+
+
+def test_tokenize_strips_punctuation_and_keeps_words_whole():
+    # Apostrophes (both forms) stay inside a word; accents survive; the rest goes.
+    assert retrieval._tokenize("Grumpy, isn't it?") == ["grumpy", "isn't", "it"]
+    assert retrieval._tokenize("He’s #tired.") == ["he’s", "tired"]
+    assert retrieval._tokenize("asignación —  Mood 3.") == ["asignación", "mood", "3"]
+
+
 def test_semantic_signal_ranks_first(session, monkeypatch):
     a = _add(session, "climbing at the gym")
     _add(session, "cooking dinner")
