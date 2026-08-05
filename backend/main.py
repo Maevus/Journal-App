@@ -5,9 +5,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from sqlmodel import Session
+from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
@@ -21,7 +21,7 @@ import models.keys  # noqa: F401, E402
 import models.ocr  # noqa: F401, E402
 import models.rate_limit  # noqa: F401, E402
 import models.user  # noqa: F401, E402
-from models.journal import engine
+from models.journal import engine, get_session
 from routers import auth, chat, entries, export, ingest, keys, search, synthesis, trends, usage
 
 logger = logging.getLogger(__name__)
@@ -214,3 +214,23 @@ app.include_router(entries.router, prefix="/entries", tags=["entries"])
 app.include_router(export.router, prefix="/export", tags=["export"])
 app.include_router(keys.router, prefix="/keys", tags=["keys"])
 app.include_router(usage.router, prefix="/usage", tags=["usage"])
+
+
+@app.get("/health", tags=["health"])
+def health(session: Session = Depends(get_session)):
+    """Container healthcheck. Unauthenticated and user-agnostic on purpose.
+
+    This used to be /trends, which later gained auth — the probe then failed on
+    every private deployment while the app was fine. A route that exists only to
+    be probed can't drift that way.
+
+    SELECT 1 so a reachable process with an unreachable database reports
+    unhealthy rather than green. No rate limiter: throttling the healthcheck
+    restarts the container under exactly the load it should survive.
+    """
+    try:
+        session.exec(select(1)).one()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Healthcheck failed: %s", exc)
+        raise HTTPException(status_code=503, detail="database unreachable")
+    return {"status": "ok"}

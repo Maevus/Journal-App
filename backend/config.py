@@ -190,7 +190,8 @@ TRUSTED_PROXY_IPS = os.getenv("TRUSTED_PROXY_IPS", "")
 #   search     a local ONNX encode — CPU, not money, so the ceiling is higher
 #   auth       the login handshake; always keyed per IP, never per user
 # Cheap reads (/trends, /entries, /usage, /auth/me) carry no limiter at all.
-# /trends in particular is the container HEALTHCHECK every 30s.
+# /health likewise — it is the container HEALTHCHECK every 30s, and throttling
+# that restarts the container under the load it should survive.
 RATE_LIMIT_CHAT_PER_MIN = int(os.getenv("RATE_LIMIT_CHAT_PER_MIN", "5"))
 RATE_LIMIT_CHAT_PER_HOUR = int(os.getenv("RATE_LIMIT_CHAT_PER_HOUR", "40"))
 RATE_LIMIT_SYNTHESIS_PER_MIN = int(os.getenv("RATE_LIMIT_SYNTHESIS_PER_MIN", "10"))
