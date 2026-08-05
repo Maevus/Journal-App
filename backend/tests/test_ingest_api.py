@@ -1,7 +1,6 @@
 """POST /ingest — the text payload path: dedup + background mood scoring.
 
-`score_mood_background` is stubbed so ingest doesn't make real LLM calls; we
-assert it's scheduled once per newly-ingested entry.
+`score_mood_background` is stubbed; asserts it's scheduled once per new entry.
 """
 import routers.ingest as ingest_router
 

@@ -4,9 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { AUTH_EXPIRED_EVENT } from '../api/client'
 import { useSSE } from './useSSE'
 
-// The synthesis stream is POST + fetch now (it was EventSource, which can only
-// GET — and a GET carrying the SameSite=Lax session cookie was CSRF-reachable),
-// so it's driven by a ReadableStream body, the same harness useChatStream uses.
+// POST + fetch, driven by a ReadableStream body — the same harness useChatStream uses.
 function streamResponse(chunks: string[], ok = true, status = 200): Response {
   const enc = new TextEncoder()
   const body = new ReadableStream<Uint8Array>({
@@ -72,7 +70,7 @@ describe('useSSE', () => {
   })
 
   it('captures a quota refusal as quota, not error or text', async () => {
-    // Over-budget runs are refused inside the 200 stream (F2): a named
+    // Over-budget runs are refused inside the 200 stream: a named
     // `event: quota` frame, no tokens, then a clean [DONE].
     vi.stubGlobal(
       'fetch',
@@ -192,8 +190,8 @@ describe('useSSE', () => {
   })
 
   it('reports an expired session so the app can show the login gate', async () => {
-    // Impossible under EventSource, which exposed no status code: a 401
-    // mid-session used to read as "Stream connection failed".
+    // A 401 mid-stream dispatches AUTH_EXPIRED_EVENT instead of surfacing as a
+    // connection failure.
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(streamResponse([], false, 401)))
     const expired = vi.fn()
     window.addEventListener(AUTH_EXPIRED_EVENT, expired)

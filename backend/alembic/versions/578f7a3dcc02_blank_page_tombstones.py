@@ -4,10 +4,9 @@ Revision ID: 578f7a3dcc02
 Revises: 692005f9feb1
 Create Date: 2026-08-05 11:19:20.028787
 
-Records pages that OCR'd to nothing. They produce no JournalEntry, so the
-existing skip never matched them and every scan paid to transcribe them again.
-
-Portable DDL — GoodNotes ingestion runs on SQLite too.
+Records pages that OCR'd to nothing — they produce no JournalEntry, so
+every scan re-transcribed them without this. Portable DDL: GoodNotes
+ingestion runs on SQLite too.
 """
 from typing import Sequence, Union
 

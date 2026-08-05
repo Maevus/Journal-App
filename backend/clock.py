@@ -1,9 +1,8 @@
 """Time helpers.
 
-The app stores naive-UTC datetimes throughout (DB timestamps carry no tzinfo),
-so use `utcnow_naive()` instead of the deprecated `datetime.utcnow()`. It returns
-the same value `datetime.utcnow()` did — current UTC with tzinfo stripped — so it
-stays comparable with stored timestamps.
+Naive-UTC datetimes throughout (DB timestamps carry no tzinfo); use
+`utcnow_naive()` instead of the deprecated `datetime.utcnow()` — same value,
+comparable with stored timestamps.
 """
 from datetime import datetime, timezone
 

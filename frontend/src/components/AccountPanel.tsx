@@ -6,10 +6,8 @@ import { UsagePanel } from './UsagePanel'
 
 type Tab = 'usage' | 'key'
 
-/** Usage + API key folded into one card with sticker tabs, replacing the two
- *  half-empty side-by-side cards. Opens on the API-key tab only when a
- *  signed-in (non-demo) user has no key yet — nudging them to add one; every
- *  other case (has a key, or demo's shared account) opens on Usage. */
+/** Usage + API key folded into one card with sticker tabs. Opens on the
+ *  API-key tab only for a signed-in user with no key yet; otherwise Usage. */
 export function AccountPanel({ demo }: { demo: boolean }) {
   // Demo knows its default synchronously; a real user needs a key-status probe
   // first, so `null` shows a brief skeleton instead of flashing the wrong tab.
@@ -53,9 +51,8 @@ export function AccountPanel({ demo }: { demo: boolean }) {
   )
 }
 
-/** A sticker label doubling as a tab: gold + filled when selected, white +
- *  muted when not. Un-rotated (unlike the decorative section stickers) so the
- *  pair reads as an aligned tab bar. */
+/** A sticker label doubling as a tab: gold when selected, white when not.
+ *  Un-rotated, unlike the decorative stickers, so the pair reads as a tab bar. */
 function TabSticker({
   id,
   active,

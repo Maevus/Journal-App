@@ -1,10 +1,7 @@
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? 'http://localhost:8000'
 
-/** Fired when a data route answers 401: the session died mid-use (expired or
- *  revoked). useAuth listens and flips the app to the login gate — one emitter,
- *  one listener, instead of plumbing auth errors up through every hook.
- *  fetchMe deliberately does NOT report: its 401 means "logged out" as an
- *  answer, not an expiry. */
+/** Fired when a data route answers 401 (session expired/revoked); useAuth
+ *  flips the app to the login gate. fetchMe's own 401 means "logged out", not expiry, so it never fires this. */
 export const AUTH_EXPIRED_EVENT = 'journal:auth-expired'
 
 export function reportIfAuthExpired(res: Response): Response {
@@ -118,11 +115,8 @@ export interface SynthesisScope {
   source: string | null
 }
 
-/** Endpoint for the synthesis stream. POST, not GET, and the scope rides in the
- *  body rather than a query string: a GET carrying the `SameSite=Lax` session
- *  cookie is reachable by cross-site navigation, so any third-party page could
- *  trigger this paid LLM call. A JSON POST requires a CORS preflight, which the
- *  backend's origin allow-list refuses. Same bare-URL shape as chatStreamUrl. */
+/** Synthesis stream endpoint. POST, with scope in the body, not a query
+ *  string: a GET would carry the session cookie cross-site; POST forces a CORS preflight the backend's allow-list refuses. */
 export function synthesisUrl(): string {
   return `${BASE_URL}/stream/synthesis`
 }
@@ -162,9 +156,8 @@ export function loginUrl(): string {
   return `${BASE_URL}/auth/login`
 }
 
-/** The logged-in user, or null when there's no live session. Auth calls send
- *  `credentials: 'include'` so the httpOnly session cookie rides along on the
- *  cross-origin request — without it the browser strips the cookie. */
+/** The logged-in user, or null with no live session. Auth calls send
+ *  `credentials: 'include'` so the httpOnly session cookie rides cross-origin. */
 export async function fetchMe(): Promise<AuthUser | null> {
   const res = await fetch(`${BASE_URL}/auth/me`, { credentials: 'include' })
   if (res.status === 401) return null // logged out — an answer, not an error
@@ -180,10 +173,8 @@ export async function logout(): Promise<void> {
   if (!res.ok) throw new Error(`Logout failed: ${res.statusText}`)
 }
 
-/** Fired after the user's BYO key is saved or removed: tier-dependent views
- *  (the usage widget's model chip and cap) refetch on it. Same one-emitter,
- *  one-listener pattern as AUTH_EXPIRED_EVENT, instead of plumbing key state
- *  across sibling panels. */
+/** Fired after the user's BYO key is saved or removed; tier-dependent views
+ *  (usage widget's model chip and cap) refetch on it. */
 export const KEY_CHANGED_EVENT = 'journal:key-changed'
 
 /** Whether the logged-in user has stored their own Anthropic key (GET /keys).
@@ -196,8 +187,7 @@ export async function fetchKeyStatus(): Promise<{ has_key: boolean; provider: st
 }
 
 /** Validate a BYO key against Anthropic and store it encrypted (POST /keys).
- *  On rejection the backend's message is surfaced (e.g. "Anthropic rejected
- *  that API key") so the form can show why. */
+ *  On rejection, the backend's message is surfaced so the form can show why. */
 export async function saveApiKey(apiKey: string): Promise<void> {
   const res = await fetch(`${BASE_URL}/keys`, {
     method: 'POST',

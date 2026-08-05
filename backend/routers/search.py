@@ -25,9 +25,8 @@ class SearchResult(BaseModel):
     external_id: str | None = None
 
 
-# A local ONNX encode per query: CPU rather than money, so the ceiling is
-# higher than the LLM tiers — but it is still work an anonymous caller can
-# make this process do, one core at a time.
+# Local ONNX encode per query: CPU not money, so the ceiling is higher than
+# the LLM tiers — but still work an anonymous caller can make this process do.
 @router.post("", dependencies=[Depends(rate_limit(TIER_SEARCH))])
 async def search(
     request: SearchRequest,

@@ -1,12 +1,9 @@
-"""
-Entry ingestion: parse, deduplicate (content hash), persist, and
-asynchronously score mood via the LLM.
+"""Entry ingestion: parse, dedupe by content hash, persist, score mood async.
 
 Sources:
-  - text        plain entries posted directly to /ingest
+  - text        plain entries posted to /ingest
   - google_keep fetched via gkeepapi (GOOGLE_EMAIL + GOOGLE_APP_MASTER_TOKEN)
-  - goodnotes   scanned from a local folder (GOODNOTES_PATH), e.g. the
-                Google Drive Desktop mirror of the GoodNotes PDF backup
+  - goodnotes   scanned from a local folder (GOODNOTES_PATH)
 """
 import asyncio
 import base64
@@ -33,12 +30,10 @@ logger = logging.getLogger(__name__)
 
 
 class RawEntry(NamedTuple):
-    """A piece of content to ingest, with the date it was authored at the source.
+    """A piece of content to ingest, with its authored time and source id.
 
-    `timestamp` is the note's real authored time (naive UTC). When None, the
-    ingest path falls back to "now" — used by sources that carry no date.
-    `external_id` is the note's ID at its source (e.g. Keep note id), enabling
-    deep links back to the original.
+    `timestamp` is naive UTC; None falls back to "now". `external_id` is the
+    note's id at its source.
     """
 
     content: str
@@ -50,11 +45,9 @@ def compute_hash(content: str) -> str:
     return hashlib.sha256(content.strip().encode("utf-8")).hexdigest()
 
 
-# Handwritten date headers like "20 Jan 2026", "Wed 5th April", "23rd December",
-# "Monday 15 December 2025", "17th of May", "DATE: 15th May", "23d May".
-# Anchored to the start of the first line so dates mentioned mid-sentence
-# don't match; requires a month name so lines like "Goals 2024" or
-# "1st draft" don't either.
+# Handwritten date headers, e.g. "20 Jan 2026", "Wed 5th April", "17th of May".
+# Anchored to line start and requires a month name, so mid-sentence dates and
+# lines like "Goals 2024" don't match.
 _INLINE_DATE_RE = re.compile(
     r"^(?:date[:\s]+)?"
     r"(?:(?:mon|tue(?:s)?|wed(?:nes)?|thu(?:rs)?|fri|sat(?:ur)?|sun)(?:day)?\s+)?"
@@ -72,17 +65,11 @@ _MONTH_NUM = {
 
 
 def parse_inline_date(content: str, fallback: Optional[datetime] = None) -> Optional[datetime]:
-    """
-    Parse a handwritten date header from the first line of an entry.
+    """Parse a handwritten date header from the entry's first line.
 
-    Journal entries often open with the date they were written about
-    (e.g. "20 Jan 2026\\n..."), which is more trustworthy than the note's
-    created timestamp when entries are written up retrospectively.
-
-    When the header has no year ("Wed 5th April"), the candidate year closest
-    to `fallback` (or now) is chosen, so a December note synced in January
-    still lands in December. Returns a naive-UTC datetime at midnight, or
-    None when no header is found.
+    Trusted over the note's created timestamp since entries are often written
+    up retrospectively. A header with no year picks the year closest to
+    `fallback` (or now). Returns naive-UTC midnight, or None if not found.
     """
     first_line = content.strip().split("\n", 1)[0].strip()
     m = _INLINE_DATE_RE.match(first_line)
@@ -127,28 +114,17 @@ def ingest_entries(
     *,
     user_id: Optional[int] = None,
 ) -> Tuple[dict, List[JournalEntry]]:
-    """
-    Persist entries: insert new ones, update edited ones, skip unchanged ones.
+    """Persist entries: insert new, update edited, skip unchanged.
 
-    Dedup is two-tier: an exact content-hash match means the entry is unchanged
-    (skip); otherwise a row with the same source + external_id means the note
-    was edited at its source — it is updated in place (content, hash, date,
-    re-embedded, mood reset) rather than duplicated. Both tiers are scoped to
-    `user_id` (ADR 0003): identical text from two accounts must both persist,
-    and one user's source-edit must never overwrite another's row. `user_id` is
-    required (JournalEntry.user_id is NOT NULL since the Postgres migration);
-    None means the connector's owner isn't resolvable yet — see the guard below.
-
-    Accepts plain strings (timestamped at ingest time) or RawEntry tuples that
-    carry the source's own authored date. Returns (stats_dict, entries needing
-    mood scoring — both newly inserted and updated).
+    Two-tier dedup scoped to `user_id` (ADR 0003 isolation): content-hash
+    match skips; source+external_id match means an edit at the source,
+    updated in place. `user_id=None` defers — see guard below (the column
+    is NOT NULL). Accepts strings or RawEntry. Returns (stats, entries
+    needing mood scoring).
     """
     if user_id is None:
-        # Since the Postgres migration JournalEntry.user_id is NOT NULL, so an
-        # unowned row can't be inserted. A connector sync whose owner isn't
-        # resolvable yet (its account hasn't logged in) ingests nothing and
-        # defers — the pages re-present on the next sync once the owner exists —
-        # rather than crashing on the NOT NULL insert.
+        # user_id is NOT NULL; an unresolved connector owner defers ingestion
+        # instead of crashing — pages re-present once the owner logs in.
         logger.info(
             "Ingest skipped for source %r: no owner resolved (%d item(s) deferred)",
             source, len(raw_entries),
@@ -185,9 +161,8 @@ def ingest_entries(
             skipped += 1
             continue
 
-        # A handwritten date header inside the entry outranks the source
-        # timestamp (entries are sometimes written up retrospectively).
-        # Same-day matches keep the source timestamp's time of day.
+        # Inline date header outranks the source timestamp (retrospective
+        # entries); same-day matches keep the source's time of day.
         inline = parse_inline_date(content, fallback=authored_at)
         if inline is not None and (authored_at is None or inline.date() != authored_at.date()):
             authored_at = inline
@@ -201,8 +176,7 @@ def ingest_entries(
                 )
             ).first()
             if prior is not None:
-                # Same note, new content — edited at the source. Update in
-                # place so edits don't accumulate as stale duplicates.
+                # Edited at the source — update in place, don't duplicate.
                 prior.content = content
                 prior.content_hash = content_hash
                 if authored_at is not None:
@@ -241,12 +215,9 @@ def ingest_entries(
 
 
 def redate_inline(session: Session) -> dict:
-    """
-    Backfill: re-date stored entries from their handwritten date headers.
+    """Backfill: re-date entries from their handwritten date headers.
 
-    Parses each entry's first line; where it names a different calendar day
-    than the stored timestamp, the timestamp is overwritten (content,
-    embeddings, and mood_score untouched).
+    Overwrites `timestamp` only, when the header names a different day.
     """
     entries = session.exec(select(JournalEntry)).all()
 
@@ -274,9 +245,8 @@ def redate_inline(session: Session) -> dict:
     return stats
 
 
-# Chars of entry text sent to the mood scorer. Longer entries are truncated to
-# this; the score then reflects only the opening. ~32% of entries exceed 600, so
-# this was raised from 600 to 2000 to cover the bulk of them (p90 ≈ 1515 chars).
+# Chars of entry text sent to the mood scorer; longer entries are truncated
+# (p90 entry length ≈ 1515 chars, so this covers most of them).
 _MOOD_CONTENT_CHARS = 2000
 
 
@@ -286,15 +256,11 @@ class _MoodScore(BaseModel):
 
 
 async def score_mood_background(entry_id: int, content: str, *, user_id: Optional[int]) -> None:
-    """
-    Background task: call the LLM for a mood score and write it back to the DB.
-    Failures are silently swallowed — scoring is best-effort.
+    """Background task: score mood via the LLM and write it back. Failures are
+    silently swallowed — best-effort.
 
-    `user_id` is the entry's owner — scoring their entry spends money on their
-    behalf. None means an unowned row (a connector sync before its account has
-    logged in): there is no owner to bill, so scoring is skipped (F3) rather
-    than spending the app key. Those rows get scored on the owner's budget once
-    they're claimed (scripts/backfill_mood_reasoning.py).
+    `user_id=None` (unowned row, no account to bill) skips scoring rather than
+    spending the app key; scored later once claimed (scripts/backfill_mood_reasoning.py).
     """
     if user_id is None:
         logger.info("Mood scoring skipped for entry %d (unowned — no owner to bill)", entry_id)
@@ -310,9 +276,7 @@ async def score_mood_background(entry_id: int, content: str, *, user_id: Optiona
                 "Score the mood of a journal entry on a scale from 0.0 (very negative) "
                 "to 1.0 (very positive). Return a precise float and a one-sentence reasoning."
             ),
-            # Room for score + a sentence of reasoning. 128 truncated mid-JSON;
-            # 256 still truncated long reasonings (invalid tool JSON → validation
-            # error), so 512 for headroom.
+            # score + reasoning; smaller truncates mid-JSON and fails validation.
             max_tokens=512,
             user_id=user_id,
         )
@@ -325,20 +289,17 @@ async def score_mood_background(entry_id: int, content: str, *, user_id: Optiona
                 session.commit()
 
     except QuotaExceededError as exc:
-        # Expected under F2, not a failure: the budget gate refused before any
-        # spend. INFO so a day of quota-skipped scorings reads as what it is.
+        # Expected (F2 gate refused before spend), not a failure — hence INFO.
         logger.info("Mood scoring skipped for entry %d (quota): %s", entry_id, exc)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Mood scoring failed for entry %d: %s", entry_id, exc)
 
 
 # ---------------------------------------------------------------------------
-# OCR helper — Claude vision (handwriting transcription)
-# GoodNotes' embedded OCR text layer is too garbled to use; Claude reads the
-# page images directly instead.
+# OCR — Claude vision. GoodNotes' embedded text layer is too garbled to use.
 # ---------------------------------------------------------------------------
 
-# claude-3-5-sonnet was retired 2025-10-28; sonnet-4-6 is the documented replacement
+# claude-3-5-sonnet retired 2025-10-28; sonnet-4-6 is its replacement.
 _OCR_MODEL = "claude-sonnet-4-6"
 _IMAGE_MEDIA_TYPES: Dict[str, str] = {
     ".png": "image/png",
@@ -348,16 +309,12 @@ _IMAGE_MEDIA_TYPES: Dict[str, str] = {
 
 
 async def _ocr_with_claude(file_bytes: bytes, media_type: str, *, user_id: Optional[int]) -> str:
-    """Transcribe handwritten or printed content via Claude vision.
+    """Transcribe handwritten/printed content via Claude vision.
 
-    Goes through llm_client.stream_text — the same choke point as every other
-    LLM call — so OCR is quota-gated before it spends, metered after, and runs
-    on the owner's BYO key when they have one. (It previously used a raw
-    Anthropic client and was the one unmetered/ungated spend surface.) The
-    model stays task-fixed (`_OCR_MODEL` needs vision), which per F3 means it's
-    honored as-is and never per-user resolved. `user_id` is the entry owner
-    from _resolve_sync_owner: their pages, their budget; None (unowned sync) is
-    system work — metered, gated only by the global cap.
+    Routes through llm_client.stream_text so OCR is quota-gated, metered, and
+    BYO-key aware like every other LLM call. Model is task-fixed for vision
+    (never per-user resolved, per F3). `user_id` is the entry owner; None
+    means system-billed work under the global cap only.
     """
     encoded = base64.standard_b64encode(file_bytes).decode()
 
@@ -441,10 +398,8 @@ def _fetch_keep_entries() -> List[RawEntry]:
         if not combined.strip():
             continue
 
-        # Keep notes carry their own authored date — use the note's
-        # creation time so entries land on the day they were written,
-        # not the day we happened to sync. gkeepapi yields tz-aware UTC;
-        # drop the tzinfo to match the DB's naive-UTC convention.
+        # Use the note's creation time, not sync time. gkeepapi yields
+        # tz-aware UTC; drop tzinfo to match the DB's naive-UTC convention.
         authored_at: Optional[datetime] = None
         ts = getattr(note, "timestamps", None)
         created = getattr(ts, "created", None)
@@ -458,13 +413,9 @@ def _fetch_keep_entries() -> List[RawEntry]:
 
 
 def _resolve_sync_owner(session: Session) -> Optional[int]:
-    """Who owns entries from the Keep/GoodNotes connectors.
-
-    Both connectors are env-configured for exactly one Google account
-    (GOOGLE_EMAIL) — pre-multi-user legacy; per-user connector config comes
-    later. Their entries belong to that account's user. Before that person
-    has ever logged in, rows stay unowned (NULL) — made visible by running
-    scripts/backfill_owner.py once, or permanently at the Postgres migration.
+    """Resolves the Keep/GoodNotes connector owner from GOOGLE_EMAIL (single
+    account, pre-multi-user). Unowned (NULL) until that user logs in — fixed
+    retroactively by scripts/backfill_owner.py.
     """
     from models.user import User
 
@@ -485,12 +436,8 @@ async def ingest_keep(session: Session) -> Tuple[dict, List[JournalEntry]]:
 
 
 async def redate_keep(session: Session) -> dict:
-    """
-    Backfill correct authored dates onto already-ingested Keep entries.
-
-    Re-fetches Keep, matches each note to a stored entry by content hash, and
-    overwrites only `timestamp` (leaving content, embeddings, and mood_score
-    untouched). For repairing entries ingested before date-capture existed.
+    """Backfill: re-fetch Keep, match notes to stored entries by content
+    hash, and overwrite only `timestamp`.
     """
     entries = await asyncio.get_running_loop().run_in_executor(None, _fetch_keep_entries)
 
@@ -535,10 +482,9 @@ async def redate_keep(session: Session) -> dict:
 
 
 async def _ensure_local(path: Path) -> Optional[Path]:
-    """
-    Resolve an iCloud eviction placeholder (.{name}.icloud) to the real local file,
-    triggering `brctl download` if needed. Non-iCloud files are returned unchanged.
-    Returns None if the file cannot be made available locally within 30 s.
+    """Resolve an iCloud eviction placeholder (.{name}.icloud) to the real
+    file, triggering `brctl download` if needed. Returns None after a 30s
+    timeout.
     """
     if not (path.name.startswith(".") and path.suffix == ".icloud"):
         return path
@@ -567,11 +513,9 @@ async def _ensure_local(path: Path) -> Optional[Path]:
 
 
 def _rescue_regressed_date(text: str, last_date: datetime) -> Optional[datetime]:
-    """
-    When a page's parsed date goes *backward* in a chronological notebook,
-    the month word was likely misread by OCR ("May" → "Nov") while the day
-    numeral is usually right. Re-anchor the day onto the running month (or
-    the next), keeping the result within [last_date, now].
+    """Rescue a date that regressed: the month was likely OCR-misread ("May"
+    → "Nov") while the day numeral is usually right. Re-anchors the day onto
+    the running month (or next), clamped to [last_date, now].
     """
     first_line = text.strip().split("\n", 1)[0].strip()
     m = _INLINE_DATE_RE.match(first_line)
@@ -623,10 +567,8 @@ def _record_blank_page(session: Session, external_id: str, *, user_id: Optional[
 def _page_already_imported(session: Session, external_id: str) -> bool:
     """True if a GoodNotes entry already exists for this page's external_id.
 
-    The GoodNotes backup is one ever-growing PDF (≈1 page/day) re-exported in
-    full, so every re-export re-presents all prior pages. Skipping OCR by page
-    existence — not file mtime — means only genuinely new (appended) pages get a
-    paid Claude-vision call; re-exporting the same file costs nothing."""
+    The backup PDF re-exports in full each time; checking existence (not
+    mtime) means only newly appended pages trigger a paid OCR call."""
     existing = session.exec(
         select(JournalEntry).where(
             JournalEntry.source == "goodnotes",
@@ -639,25 +581,19 @@ def _page_already_imported(session: Session, external_id: str) -> bool:
 async def ingest_goodnotes(
     session: Session, force: bool = False
 ) -> Tuple[dict, List[JournalEntry]]:
-    """
-    Scan the local GoodNotes folder and ingest each PDF page (or image) as
-    its own journal entry, transcribed via Claude vision.
+    """Scan the local GoodNotes folder, OCR each new page via Claude vision,
+    and ingest it as its own entry.
 
-    Page identity is "<filename>#p<N>" in external_id. The backup is one
-    ever-growing PDF re-exported in full, so already-ingested pages are skipped
-    by existence (`_page_already_imported`) before any paid OCR call — only
-    appended pages are transcribed. Entry dates come from handwritten date
-    headers (parse_inline_date), falling back to file mtime.
-
-    `force=True` re-OCRs every page even when it already exists (edited pages
-    then update in place; unchanged pages dedupe by content hash).
+    Page identity is "<filename>#p<N>". Already-ingested pages are skipped by
+    existence before any paid OCR call. Dates come from handwritten headers,
+    falling back to file mtime. `force=True` re-OCRs existing pages too.
     """
     raw_path = os.environ["GOODNOTES_PATH"]
     folder = Path(os.path.expanduser(raw_path))
 
     if not folder.exists():
-        # ERROR + an `error` key, so a stale path is distinguishable from a scan
-        # that found nothing new.
+        # ERROR + `error` key distinguishes a stale path from a scan that
+        # found nothing new.
         logger.error(
             "GoodNotes path does not exist: %s — connector is ingesting NOTHING "
             "until GOODNOTES_PATH is corrected", folder,
@@ -667,8 +603,7 @@ async def ingest_goodnotes(
             "error": f"GOODNOTES_PATH does not exist: {folder}",
         }, []
 
-    # OCR spends money, so it's billed to the sync owner (their pages, their
-    # budget/key) and quota-gated per call. Resolved once, up front.
+    # OCR spends money — billed to the sync owner and quota-gated per call.
     owner = _resolve_sync_owner(session)
     raw_entries: List[RawEntry] = []
     ocr_calls = 0
@@ -692,8 +627,7 @@ async def ingest_goodnotes(
 
         if suffix == ".pdf":
             page_pdfs = _split_pdf_pages(resolved)
-            # Notebook pages are chronological: pages without a parseable
-            # date header inherit the date of the last dated page before them.
+            # Chronological notebook: undated pages inherit the last dated page's date.
             last_date: Optional[datetime] = None
             for page_num, page_bytes in enumerate(page_pdfs, start=1):
                 external_id = f"{resolved.name}#p{page_num}"
@@ -705,9 +639,8 @@ async def ingest_goodnotes(
                 try:
                     text = await _ocr_with_claude(page_bytes, "application/pdf", user_id=owner)
                 except QuotaExceededError as exc:
-                    # The gate refused BEFORE spending; every further page would
-                    # be refused too. Stop scanning but keep (and ingest) the
-                    # pages already transcribed — that money is spent.
+                    # Refused before spending; further pages would refuse too.
+                    # Stop scanning but keep pages already transcribed.
                     logger.info("GoodNotes OCR stopped by quota: %s", exc)
                     quota_hit = True
                     break
@@ -716,9 +649,7 @@ async def ingest_goodnotes(
                     _record_blank_page(session, external_id, user_id=owner)
                     continue
                 parsed = parse_inline_date(text, fallback=last_date or file_mtime)
-                # Notebooks move forward in time: a parsed date earlier than
-                # the running date is an OCR misread — rescue the day onto the
-                # running month, or inherit the running date.
+                # A date earlier than the running date is likely an OCR misread.
                 if parsed is not None and last_date is not None and parsed < last_date:
                     parsed = _rescue_regressed_date(text, last_date)
                 if parsed is not None:

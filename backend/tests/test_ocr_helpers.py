@@ -48,8 +48,7 @@ def test_split_pdf_returns_one_blob_per_page(tmp_path):
 
 
 def test_malformed_pdf_raises(tmp_path):
-    # Documents current behaviour: _split_pdf_pages has no guard, so a corrupt
-    # PDF propagates the pypdf error (which would abort a GoodNotes scan).
+    # No guard: a corrupt PDF propagates the pypdf error, aborting a GoodNotes scan.
     bad = tmp_path / "broken.pdf"
     bad.write_bytes(b"this is not a pdf at all")
     with pytest.raises(Exception):

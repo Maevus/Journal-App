@@ -1,16 +1,14 @@
 """One-time data copy: SQLite journal.db → Postgres (ADR 0003, the engine move).
 
-Copies every row of every table from the legacy SQLite DB into a freshly-migrated
-Postgres DB, **preserving primary keys** so the Chroma vectors (keyed by
-`str(entry.id)`) stay aligned without re-embedding. The SQLite file is opened
-read-only and never written, so it remains an intact rollback.
+Copies every row of every table, **preserving primary keys** so the Chroma
+vectors (keyed by `str(entry.id)`) stay aligned without re-embedding. The
+SQLite file is opened read-only, so it remains an intact rollback.
 
 Run order (from backend/, venv active):
 
   1. docker compose up -d db                         # Postgres on :5432
   2. DATABASE_URL=postgresql+psycopg://…  alembic upgrade head   # empty schema
-  3. python scripts/backfill_owner.py you@gmail.com  # on the SOURCE sqlite DB,
-                                                     # so no NULL user_id remains
+  3. python scripts/backfill_owner.py you@gmail.com  # on the SOURCE sqlite DB
   4. DATABASE_URL=postgresql+psycopg://…  python scripts/migrate_sqlite_to_pg.py
 
 `DATABASE_URL` (the target) must be Postgres; `--source` defaults to the real

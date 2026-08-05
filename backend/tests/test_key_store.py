@@ -1,8 +1,8 @@
 """Slice F4a: BYO API keys, encrypted at rest.
 
-The key-store interface hands back the plaintext key; encryption is an internal
-detail (Fernet, keyed on APP_ENCRYPTION_KEY). The at-rest guarantee: the bytes
-that land in the DB are ciphertext, never the raw key.
+The store hands back plaintext; encryption (Fernet, keyed on
+APP_ENCRYPTION_KEY) is internal. Guarantee: the bytes in the DB are
+ciphertext, never the raw key.
 """
 import pytest
 from cryptography.fernet import Fernet

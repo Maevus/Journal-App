@@ -2,31 +2,17 @@ import { useCallback, useRef, useState } from 'react'
 import { reportIfAuthExpired } from '../api/client'
 
 /**
- * The SSE client both LLM streams run on: POST a JSON body, read the response
- * as a byte stream, and turn `data:`/`event:` frames into React state.
+ * Shared SSE client for both LLM streams: POST JSON, read the response as a
+ * byte stream, turn `data:`/`event:` frames into React state.
  *
- * Both streams are POST because a paid LLM call must not be reachable by
- * cross-site navigation: the session cookie is `SameSite=Lax`, so the browser
- * sends it on a top-level cross-site GET, and CORS only stops a third party
- * *reading* the response — not the server processing (and paying for) the
- * request. A POST with `Content-Type: application/json` needs a CORS preflight,
- * which the backend's origin allow-list refuses. Chat needed POST anyway (it
- * carries the conversation); synthesis was moved onto it to close that hole,
- * which is what let the two hooks collapse onto this one client.
- *
- * The cost of leaving `EventSource` behind is its auto-reconnect — but the old
- * `useSSE` closed the connection in `onerror` anyway, so nothing regresses. The
- * gains: a real `AbortController` on the wire (Stop actually hangs up, instead
- * of the server streaming into a closed reader), and `reportIfAuthExpired`, so
- * a session that dies mid-stream flips the app to the login gate instead of
- * surfacing as "Stream connection failed".
+ * POST avoids a cross-site-reachable GET (paid call + `SameSite=Lax` cookie);
+ * `fetch`+`AbortController` (not `EventSource`) makes Stop actually hang up;
+ * `reportIfAuthExpired` sends a mid-stream 401 to the login gate.
  */
 
-/** Handlers for stream-specific named frames, keyed by the `event:` name.
- *  Chat registers `sources`; synthesis registers none. The refusal frames
- *  (`quota`, `rate_limited`) are handled here for everyone — they are protocol,
- *  not per-stream payload. Pass a stable (module-level or memoised) object:
- *  it feeds `start`'s dependency list. */
+/** Handlers for stream-specific named frames, keyed by `event:` name (chat
+ *  registers `sources`; synthesis registers none). `quota`/`rate_limited` are
+ *  handled here for everyone. Pass a stable object — it feeds `start`'s deps. */
 export type FrameHandlers = Record<string, (data: string) => void>
 
 /** Module-level so the default argument is referentially stable across renders. */
@@ -35,21 +21,19 @@ const NO_HANDLERS: FrameHandlers = {}
 export interface UsePostStreamReturn {
   text: string
   error: string | null
-  /** Message from an `event: quota` refusal frame (F2) — the backend refused
-   *  the LLM call before spending. A refusal is an answer, not an error. */
+  /** Message from an `event: quota` refusal frame: the backend refused
+   *  before spending. A refusal is an answer, not an error. */
   quota: string | null
-  /** Message from an `event: rate_limited` refusal frame — the backend refused
-   *  because the caller is asking too fast. Same shape as `quota`: a notice,
-   *  not the red error banner. */
+  /** Message from an `event: rate_limited` refusal frame: caller is asking
+   *  too fast. Same shape as `quota` — a notice, not an error. */
   rateLimited: string | null
   isStreaming: boolean
   start: (url: string, body: unknown) => void
   abort: () => void
 }
 
-/** One SSE frame's `event:` name and its `data:` payload. A frame may carry an
- *  `event:` line plus one or more `data:` lines; multiple data lines join with
- *  newlines, per the SSE spec. No `event:` line means the default, `message`. */
+/** One SSE frame's `event:` name and `data:` payload. Multiple `data:` lines
+ *  join with newlines (SSE spec); no `event:` line means the default, `message`. */
 function parseFrame(frame: string): { event: string; data: string } {
   let event = 'message'
   const dataLines: string[] = []
@@ -60,10 +44,8 @@ function parseFrame(frame: string): { event: string; data: string } {
   return { event, data: dataLines.join('\n') }
 }
 
-/** The human-readable line for a refusal frame. Both refusal frames carry
- *  `{code, message, …}` and the server's `message` is the better copy — it
- *  knows the budget, the window, and the retry delay — so prefer it and fall
- *  back only when the payload is missing or malformed. */
+/** Human-readable line for a refusal frame. Both carry `{code, message, …}`;
+ *  prefer the server's `message` — it knows the budget/window/retry delay. */
 function refusalMessage(data: string, fallback: string): string {
   try {
     const payload = JSON.parse(data) as { message?: string; retry_after?: number }

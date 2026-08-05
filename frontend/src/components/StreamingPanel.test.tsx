@@ -49,8 +49,7 @@ describe('StreamingPanel', () => {
     render(<StreamingPanel range={range} source={{ value: 'google_keep', label: 'Keep' }} />)
     expect(screen.getByText(/Synthesis of your month/)).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: /generate synthesis/i }))
-    // The scope is now a POST body, not a query string baked into a URL at
-    // render time — so the panel passes it at start().
+    // The scope rides in the POST body, not a URL, so the panel passes it to start().
     expect(sse.start).toHaveBeenCalledWith({ limit: 20, days: 30, source: 'google_keep' })
   })
 

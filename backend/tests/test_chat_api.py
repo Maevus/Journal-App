@@ -140,9 +140,8 @@ def test_chat_condenses_followup_before_retrieval(client, me, monkeypatch):
 
 
 def test_chat_sends_prior_turns_and_raw_question_to_llm(client, me, monkeypatch):
-    """The LLM receives the prior turns as real user/assistant messages, then a
-    final user turn whose prompt carries the retrieved entries and the *raw*
-    question (retrieval uses the condensed standalone query; the answer does not)."""
+    """Prior turns pass through as real messages; the final user turn carries
+    retrieved entries + the *raw* question (retrieval used the condensed one)."""
     def fake_hybrid(session, query, limit, start=None, end=None, *, user_id=None):
         return [(JournalEntry(id=1, source="text", content="CONTENT_TOKEN",
                               content_hash="h", timestamp=datetime(2026, 6, 1)), 0.5)]
@@ -269,9 +268,8 @@ async def _refusing_stream(*args, **kwargs):
 
 
 def test_over_budget_streams_quota_frame_without_sources(client, me, monkeypatch):
-    """An over-budget chat turn gets the named `event: quota` frame and a clean
-    [DONE] — and no `event: sources` frame, since citation chips for an answer
-    that never happened would be orphans."""
+    """Over-budget gets `event: quota` + a clean [DONE], and no `event: sources`
+    frame — citation chips for an answer that never happened would be orphans."""
     monkeypatch.setattr(chat, "hybrid_search", lambda *a, **k: [])
     monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
     monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
@@ -291,12 +289,10 @@ def test_over_budget_streams_quota_frame_without_sources(client, me, monkeypatch
 def test_chat_gives_agent_per_entry_mood_and_whole_journal_summary(
     client, me, add_entry, monkeypatch
 ):
-    """The Ask agent's prompt carries each retrieved entry's computed mood plus a
-    whole-journal mood summary — so it can answer both "how did I feel then" and
-    "what's my average / trend" (which RAG's few entries can't cover)."""
-    # Scored entries the summary aggregates over (real mood_summary runs against
-    # the request DB; add_entry owns them by `me`). The retrieved hit below is a
-    # separate stub, not in the DB, so it isn't double-counted in the summary.
+    """The prompt carries each retrieved entry's mood plus a whole-journal mood
+    summary, so it can answer both "how did I feel then" and "what's my trend"."""
+    # Scored entries the summary aggregates over; the retrieved hit below is a
+    # separate stub not in the DB, so it isn't double-counted.
     add_entry("older", mood_score=0.4, timestamp=datetime(2025, 6, 1))
     add_entry("newer", mood_score=0.6, timestamp=datetime(2026, 6, 1))
 

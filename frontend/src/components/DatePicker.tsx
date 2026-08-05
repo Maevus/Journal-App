@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
-/* Brutalist calendar popover replacing native <input type="date">: the browser
-   popup can't be themed, and its month/year drill-down is a dead-end. This one
-   uses a zoom model instead — the header button zooms out (days → months →
-   years), picking zooms back in — so every view has a way back. */
+/* Calendar popover replacing native <input type="date">: unthemeable, with a
+   dead-end month/year drill-down. Header button zooms out (days → months →
+   years); picking a cell zooms back in. */
 
 const MONTHS = [
   'jan', 'feb', 'mar', 'apr', 'may', 'jun',

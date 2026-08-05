@@ -103,11 +103,9 @@ def test_bm25_surfaces_keyword_without_semantic(session, monkeypatch):
 
 
 def test_bm25_matches_words_carrying_punctuation(session, monkeypatch):
-    """A word ending a sentence must still match the bare query term.
-
-    `.split()` alone tokenised "grumpy." as a distinct string from "grumpy",
-    so an entry literally about being grumpy scored 0.0 and sank to rank 241
-    in the real journal. Punctuation is stripped at tokenisation now.
+    """A word ending a sentence must still match the bare query term: `.split()`
+    tokenised "grumpy." separately from "grumpy", sinking a real entry to rank
+    241. Punctuation is now stripped at tokenisation.
     """
     a = _add(session, "I feel cruddy awful. Frustrated, negative, grumpy.")
     # BM25Okapi's IDF is log((N-n+0.5)/(n+0.5)) — exactly 0 for a term in 1 of 2
@@ -270,10 +268,9 @@ async def test_condense_query_falls_back_when_blank(monkeypatch):
 
 
 async def test_quota_refusal_degrades_like_any_llm_failure(monkeypatch):
-    """F2 pin: chat's cheap helpers must keep degrading gracefully when the
-    quota gate refuses their haiku calls — the refusal costs $0 and the turn
-    still gets stopped (with the user-facing quota frame) at its main call.
-    Guards against ever narrowing their broad `except` past QuotaExceededError."""
+    """F2 pin: chat's cheap helpers must degrade gracefully when quota refuses
+    their haiku calls — the turn still stops at its main call. Guards against
+    narrowing their broad `except` past QuotaExceededError."""
     from services.quota import QuotaExceededError
 
     async def refuse(*args, **kwargs):

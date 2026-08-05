@@ -1,17 +1,16 @@
 """Route policy: which routes are limited, and what a refusal looks like on the wire.
 
-Two shapes of refusal, and the difference is not cosmetic. A normal route gets a
-real 429 with `Retry-After`, which an HTTP client can act on. The two SSE routes
-get a named frame inside a **200**, because `EventSource` cannot read the body of
-a non-200 response and reconnects by itself — a 429 there reaches the user as a
-reconnect loop under a generic "network error", with the actual reason
-unreadable. Same reasoning as the existing `event: quota` frame.
+Two shapes of refusal. A normal route gets a real 429 with `Retry-After`. The two
+SSE routes get a named frame inside a **200**, because `EventSource` cannot read
+the body of a non-200 response and reconnects by itself — a 429 there would reach
+the user as a reconnect loop under a generic "network error". Same reasoning as
+the existing `event: quota` frame.
 
-`test_a_refusal_carries_cors_headers` is the one pinning the middleware-vs-
-dependency decision: Starlette's `add_middleware` prepends, so a limiter added
-the obvious way in main.py lands OUTSIDE `CORSMiddleware` and its 429s ship with
-no `Access-Control-Allow-Origin` at all — which the browser reports as an opaque
-network failure rather than a rate limit. A route dependency runs inside it.
+`test_a_refusal_carries_cors_headers` pins the middleware-vs-dependency decision:
+Starlette's `add_middleware` prepends, so a limiter added the obvious way in
+main.py lands OUTSIDE `CORSMiddleware` and its 429s ship with no
+`Access-Control-Allow-Origin` — the browser reports that as an opaque network
+failure, not a rate limit. A route dependency runs inside it.
 """
 import json
 from collections import OrderedDict
@@ -25,8 +24,8 @@ from models.rate_limit import RateLimitCounter
 
 @pytest.fixture
 def tight(monkeypatch):
-    """Squeeze one tier down to `per_min` for a test (the autouse headroom
-    fixture holds every other tier open)."""
+    """Squeeze one tier to `per_min` (the autouse headroom fixture holds every
+    other tier open)."""
     def _set(tier, per_min=1, per_hour=0):
         monkeypatch.setattr(config, f"RATE_LIMIT_{tier}_PER_MIN", per_min)
         monkeypatch.setattr(config, f"RATE_LIMIT_{tier}_PER_HOUR", per_hour)
@@ -36,8 +35,8 @@ def tight(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_external_calls(monkeypatch):
-    """Every limited route below would otherwise reach the network or the LLM on
-    the requests the limiter *allows*. Stub the boundaries, not the limiter."""
+    """Every limited route below would otherwise hit the network or the LLM on
+    requests the limiter *allows*. Stub the boundaries, not the limiter."""
     import routers.chat as chat
     import routers.ingest as ingest
     import routers.keys as keys
@@ -62,8 +61,8 @@ def _no_external_calls(monkeypatch):
     monkeypatch.setattr(synthesis, "stream_text", _no_tokens)
     monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
     monkeypatch.setattr(ingest, "score_mood_background", _noop)
-    # /keys validates against Anthropic; APP_ENCRYPTION_KEY empty makes the
-    # handler 503 before it gets there, which is fine — the limiter runs first.
+    # /keys validates against Anthropic; empty APP_ENCRYPTION_KEY 503s it before
+    # that, which is fine — the limiter runs first.
     monkeypatch.setattr(keys, "key_is_valid", lambda raw: False)
     monkeypatch.setattr(config, "APP_ENCRYPTION_KEY", "")
 
@@ -89,10 +88,9 @@ def _post_keys(client):
     ],
 )
 def test_non_stream_routes_refuse_with_429_and_retry_after(client, me, tight, tier, send):
-    """One request through, the next refused. The statuses of the allowed calls
-    are deliberately not asserted — /keys 503s without an encryption key — since
-    what is under test is that the limiter fires regardless of how the handler
-    would have ended."""
+    """One request through, the next refused. The allowed call's status is
+    deliberately not asserted — /keys 503s without an encryption key — since
+    what's under test is that the limiter fires regardless of how the handler ends."""
     tight(tier, per_min=1)
     send(client)
     refused = send(client)
@@ -103,8 +101,8 @@ def test_non_stream_routes_refuse_with_429_and_retry_after(client, me, tight, ti
 
 
 def test_login_is_throttled_per_ip(client, tight, monkeypatch):
-    """§5 of the security checklist. The handshake is keyed on the address, not
-    on a session cookie — the point of logging in is that you haven't got one."""
+    """The handshake is keyed on the address, not a session cookie — the point
+    of logging in is that you haven't got one."""
     import routers.auth as auth_routes
 
     async def _fake_exchange(request):
@@ -121,8 +119,8 @@ def test_login_is_throttled_per_ip(client, tight, monkeypatch):
 
 
 def test_login_redirect_is_throttled_too(client, tight, monkeypatch):
-    """/auth/login and /auth/callback share the tier: throttling only the
-    callback would leave the outbound leg as a free request amplifier."""
+    """/auth/login and /auth/callback share a tier: throttling only the callback
+    would leave the outbound leg as a free request amplifier."""
     import routers.auth as auth_routes
     from starlette.responses import RedirectResponse
 
@@ -137,10 +135,10 @@ def test_login_redirect_is_throttled_too(client, tight, monkeypatch):
 
 
 def test_a_refusal_carries_cors_headers(client, me, tight):
-    """The reason this is a route dependency and not middleware. Without the
-    `Access-Control-Allow-Origin` header the browser discards the response
-    before the SPA sees the status, so a rate limit is indistinguishable from
-    the API being unreachable."""
+    """Why this is a route dependency and not middleware: without the
+    `Access-Control-Allow-Origin` header, the browser discards the response
+    before the SPA sees the status — a rate limit would look like the API
+    being unreachable."""
     tight("SEARCH", per_min=1)
     origin = {"Origin": config.FRONTEND_URL}
     client.post("/search", json={"query": "x"}, headers=origin)
@@ -151,9 +149,9 @@ def test_a_refusal_carries_cors_headers(client, me, tight):
 
 
 def test_chat_refusal_rides_inside_a_200_stream(client, me, tight, monkeypatch):
-    """And — the actual point of limiting chat — the refused request must not
-    reach the LLM. Chat makes three calls per request (condense, date parse,
-    the stream), so a refusal that still ran the handler would save nothing."""
+    """The point of limiting chat: a refused request must not reach the LLM.
+    Chat makes three calls per request (condense, date parse, stream), so a
+    refusal that still ran the handler would save nothing."""
     import routers.chat as chat
 
     calls = []
@@ -190,8 +188,8 @@ def test_synthesis_refusal_rides_inside_a_200_stream(client, me, add_entry, tigh
 
 
 def test_the_stream_frame_matches_the_agreed_payload(client, me, tight):
-    """The wire contract the frontend parses, asserted end to end rather than
-    only at the helper: event name, the three keys, and an integer retry."""
+    """The wire contract the frontend parses, checked end to end rather than only
+    at the helper: event name, the three keys, an integer retry."""
     tight("CHAT", per_min=1)
     body = {"messages": [{"role": "user", "content": "hi"}], "limit": 5}
     client.post("/stream/chat", json=body)
@@ -214,10 +212,10 @@ def test_the_stream_frame_matches_the_agreed_payload(client, me, tight):
     ],
 )
 def test_cheap_reads_are_exempt(client, me, tight, path, params):
-    """These are polled by the SPA and, in /trends' case, by the container
-    HEALTHCHECK every 30 seconds — throttling it would make the container
-    restart itself under load. Every tier is squeezed to 1 here, so a limiter
-    accidentally attached to one of these would fail this test loudly."""
+    """Polled by the SPA and, for /trends, by the container HEALTHCHECK every 30s
+    — throttling it would make the container restart itself under load. Every
+    tier is squeezed to 1 here, so a limiter attached to one of these by
+    accident fails this test loudly."""
     for tier in ("CHAT", "SYNTHESIS", "INGEST", "KEYS", "SEARCH", "AUTH"):
         tight(tier, per_min=1)
 
@@ -226,8 +224,8 @@ def test_cheap_reads_are_exempt(client, me, tight, path, params):
 
 
 def test_the_healthcheck_route_does_no_limiter_work_at_all(client, me, tight):
-    """Stronger than "not refused": /trends must not even write a counter row.
-    A row per healthcheck is a write every 30 seconds forever, per container."""
+    """Stronger than "not refused": /trends must not write a counter row at all
+    — a write every 30 seconds forever, per container, otherwise."""
     tight("SEARCH", per_min=1)
     for _ in range(5):
         client.get("/trends", params={"days": 30})
@@ -238,7 +236,7 @@ def test_the_healthcheck_route_does_no_limiter_work_at_all(client, me, tight):
 
 def test_exhausting_one_tier_leaves_the_others_open(client, me, tight):
     """Tiers are separate budgets because they have separate costs — a user who
-    has used up their chat allowance can still search their own journal."""
+    exhausted chat can still search their own journal."""
     tight("CHAT", per_min=1)
     body = {"messages": [{"role": "user", "content": "hi"}], "limit": 5}
     client.post("/stream/chat", json=body)
@@ -248,10 +246,10 @@ def test_exhausting_one_tier_leaves_the_others_open(client, me, tight):
 
 
 def test_anonymous_visitors_are_bucketed_by_address_end_to_end(client, tight, monkeypatch):
-    """The PUBLIC_DEMO shape, through the real stack: two signed-out visitors
-    both resolve to the shared demo user, and must still get separate budgets.
+    """The PUBLIC_DEMO shape through the real stack: two signed-out visitors both
+    resolve to the shared demo user, and must still get separate budgets.
     `TRUSTED_PROXY_IPS` is set to the TestClient's own peer name so the forwarded
-    header is believed — the same trust boundary a real deployment configures.
+    header is believed — the trust boundary a real deployment configures.
     """
     monkeypatch.setattr(config, "PUBLIC_DEMO", True)
     monkeypatch.setattr(config, "TRUSTED_PROXY_IPS", "testclient")
@@ -267,9 +265,9 @@ def test_anonymous_visitors_are_bucketed_by_address_end_to_end(client, tight, mo
 
 
 def test_a_forged_forwarded_header_does_not_mint_fresh_budgets(client, me, tight, monkeypatch):
-    """The trust boundary, end to end. With no proxy configured the header is
-    ignored, so varying it per request buys nothing — which is the entire reason
-    TRUSTED_PROXY_IPS exists and the Dockerfile no longer passes `*`."""
+    """The trust boundary, end to end: with no proxy configured the header is
+    ignored, so varying it per request buys nothing — why TRUSTED_PROXY_IPS
+    exists and the Dockerfile no longer passes `*`."""
     monkeypatch.setattr(config, "TRUSTED_PROXY_IPS", "")
     # Signed out, so the caller is keyed by address rather than by user id.
     client.cookies.clear()

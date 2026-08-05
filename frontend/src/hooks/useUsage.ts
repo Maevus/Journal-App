@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react'
 import { KEY_CHANGED_EVENT, fetchUsage, type UsageSummary } from '../api/client'
 
-/** The logged-in user's LLM spend, refetched when their BYO key is saved or
- *  removed (KEY_CHANGED_EVENT) — the tier chip and cap must not go stale while
- *  the key panel sits on the same screen. */
+/** The logged-in user's LLM spend, refetched on KEY_CHANGED_EVENT — the tier
+ *  chip and cap must not go stale while the key panel is on screen. */
 export function useUsage(days = 30) {
   const [data, setData] = useState<UsageSummary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -26,9 +25,8 @@ export function useUsage(days = 30) {
           if (!cancelled) setLoading(false)
         })
     }
-    // No setLoading(true) here: `loading` initializes true for the first
-    // fetch, and refetches (key change, days change) keep the current card
-    // visible instead of flashing the skeleton — the numbers swap in place.
+    // No setLoading(true) here: `loading` starts true for the first fetch;
+    // refetches keep the current card visible instead of flashing the skeleton.
     load()
     window.addEventListener(KEY_CHANGED_EVENT, load)
     return () => {

@@ -1,11 +1,8 @@
 """/auth routes — the HTTP surface of the login flow (ADR 0003).
 
-The Google round-trip itself (redirect out, code→token exchange, id_token
-signature check) is Authlib's code, tested upstream — it's mocked here. These
-tests cover OUR half of the callback: verified `sub`+`email` →
-get_or_create_user → create_session → httpOnly cookie → redirect — plus
-/auth/me as the "who am I" probe and logout as *server-side* revocation
-(deleting the cookie alone would leave the session live in the DB).
+Authlib's Google round-trip is mocked; these test our half: verified
+sub+email → get_or_create_user → session cookie → redirect, plus /auth/me
+and logout (server-side revocation, not just cookie deletion).
 """
 from sqlmodel import Session, select
 
@@ -13,8 +10,7 @@ from models.user import User, UserSession
 
 
 def _fake_google_login(monkeypatch, sub="sub-1", email="a@example.com"):
-    """Short-circuit the token exchange: Authlib hands back a verified
-    identity as if Google had authenticated this person."""
+    """Short-circuits the token exchange as if Google authenticated this person."""
     import routers.auth as auth_routes
 
     async def fake_exchange(request):
@@ -42,11 +38,9 @@ def test_callback_creates_user_sets_cookie_and_redirects(client, monkeypatch):
 
 
 def test_callback_marks_the_session_cookie_secure_when_configured(client, monkeypatch):
-    """COOKIE_SECURE must actually reach the Set-Cookie header. It is explicit
-    config rather than `request.url.scheme == "https"` because behind a
-    TLS-terminating proxy the app sees plain http and would ship the session
-    token without Secure — leaking it to anyone who can nudge the user to http://.
-    """
+    """COOKIE_SECURE must reach the Set-Cookie header. Explicit config, not
+    request.url.scheme, since behind a TLS-terminating proxy the app sees
+    plain http and would ship the cookie without Secure."""
     import config
 
     monkeypatch.setattr(config, "COOKIE_SECURE", True)
@@ -101,9 +95,9 @@ def test_me_returns_user_when_logged_in(client, monkeypatch):
 
 
 def test_me_reports_demo_for_a_signed_out_public_demo_visitor(client, monkeypatch):
-    """Under PUBLIC_DEMO a signed-out visitor resolves to the demo user, and
-    /auth/me says demo:true — the SPA hides key management and shows the sign-in
-    CTA instead of surfacing a 403 on save."""
+    """Under PUBLIC_DEMO a signed-out visitor resolves to the demo user;
+    /auth/me reports demo:true so the SPA hides key management instead of
+    surfacing a 403 on save."""
     import config
 
     monkeypatch.setattr(config, "PUBLIC_DEMO", True)
@@ -148,14 +142,11 @@ def test_logout_without_cookie_is_idempotent(client):
 
 
 def test_login_cookie_survives_oauth_state_cleanup(client, monkeypatch):
-    """Regression: SessionMiddleware must not clobber the login cookie.
-
-    In the real flow the callback request carries the middleware's signed
-    cookie holding the OAuth `state`; Authlib pops it during the exchange,
-    so the middleware appends its own deletion Set-Cookie to OUR response.
-    If the two cookies share a name, that deletion lands after ours and the
-    login token dies in the very response that set it. The simple-mock tests
-    never touch request.session, so only this test exercises that path.
+    """SessionMiddleware must not clobber the login cookie: Authlib pops the
+    signed OAuth-state cookie during exchange, so the middleware appends its
+    own deletion Set-Cookie to our response. Same cookie name means that
+    deletion lands after ours and kills the login token in the same response
+    that set it. Only this test exercises that path.
     """
     import json
     from base64 import b64encode
@@ -167,8 +158,8 @@ def test_login_cookie_survives_oauth_state_cleanup(client, monkeypatch):
     import main
     import routers.auth as auth_routes
 
-    # Forge what /auth/login would have left behind: the middleware's signed
-    # cookie carrying the pending state — under whatever name it's configured.
+    # Forge what /auth/login leaves behind: the middleware's signed cookie
+    # carrying the pending state, under whatever name it's configured.
     middleware = next(
         m for m in main.app.user_middleware if m.cls is SessionMiddleware
     )
@@ -179,8 +170,7 @@ def test_login_cookie_survives_oauth_state_cleanup(client, monkeypatch):
     client.cookies.set(state_cookie, forged)
 
     async def fake_exchange(request):
-        # What real Authlib does that the simple mock doesn't: consume the
-        # pending state, leaving the middleware session modified-and-empty.
+        # Real Authlib consumes the pending state; the simple mock doesn't.
         request.session.pop("_state_google_teststate")
         return {"userinfo": {"sub": "sub-1", "email": "a@example.com"}}
 
@@ -190,10 +180,8 @@ def test_login_cookie_survives_oauth_state_cleanup(client, monkeypatch):
 
     resp = client.get("/auth/callback", follow_redirects=False)
 
-    # Assert on the raw headers, not the cookie jar: httpx's jar happens to
-    # keep the first same-named cookie, but real browsers apply Set-Cookie
-    # headers in order — a trailing `session=null; expires=1970` deletes the
-    # login token in the very response that set it.
+    # Raw headers, not the cookie jar: httpx's jar keeps only the first
+    # same-named cookie, but browsers apply Set-Cookie headers in order.
     from services.auth import SESSION_COOKIE
 
     session_setters = [

@@ -99,7 +99,7 @@ describe('useChatStream', () => {
   })
 
   it('captures a quota refusal frame as quota, not error or text', async () => {
-    // Over-budget turns are refused inside the 200 stream (F2): a named
+    // Over-budget turns are refused inside the 200 stream: a named
     // `event: quota` frame, no tokens, no sources, then a clean [DONE].
     const fetchMock = vi.fn().mockResolvedValue(
       streamResponse([

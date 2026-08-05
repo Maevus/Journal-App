@@ -1,23 +1,13 @@
-"""
-Backfill mood_reasoning for existing entries by re-scoring them via the LLM.
-
-Until now the scorer discarded the reasoning, so entries created before that
-have a mood_score but no reasoning. This re-scores every entry missing a
-reasoning, writing back both score and reasoning.
+"""Backfill mood_reasoning for entries that have a mood_score but no reasoning.
 
 Usage (from backend/):
 
     .venv/bin/python scripts/backfill_mood_reasoning.py          # real journal.db
     APP_MODE=demo .venv/bin/python scripts/backfill_mood_reasoning.py
 
-Costs one LLM call per entry missing a reasoning, billed to each entry's owner
-(F3). Safe to re-run — it only touches rows where mood_reasoning IS NULL. (The
-demo DB is seeded with canned reasoning, so it normally has nothing to backfill.)
-
-Ordering note: scoring an owner's entry spends on *their* budget. A free-tier
-owner ($0 quota, no BYO key) has every scoring refused by the quota gate before
-any API traffic, so those rows stay missing until the owner adds a key. Run this
-after the owner's key is in place.
+One LLM call per entry, billed to its owner (F3). Safe to re-run — only touches
+rows where mood_reasoning IS NULL. Free-tier owners with no BYO key have the
+quota gate refuse every call, so their rows stay missing until they add a key.
 """
 import asyncio
 import os
@@ -34,9 +24,8 @@ load_dotenv()
 
 from sqlmodel import Session, select  # noqa: E402
 
-# Register every table in the shared metadata, as main.py does — otherwise
-# JournalEntry.user_id's foreign key to `users` can't be resolved at commit
-# time (SQLAlchemy: "could not find table 'users'").
+# Register every table in the shared metadata (like main.py) — otherwise the
+# FK from JournalEntry.user_id to `users` can't resolve at commit time.
 import models.journal  # noqa: F401, E402
 import models.user  # noqa: F401, E402
 import models.keys  # noqa: F401, E402

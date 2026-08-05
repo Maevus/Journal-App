@@ -38,9 +38,8 @@ afterEach(() => {
 
 describe('synthesisUrl', () => {
   it('points at the synthesis stream endpoint, with no query string', () => {
-    // The scope moved into the POST body: a GET carrying the SameSite=Lax
-    // session cookie was reachable by cross-site navigation, and a JSON POST
-    // forces a CORS preflight the backend's allow-list refuses.
+    // POST with the scope in the body: a GET would leak the session cookie
+    // cross-site, and POST forces a CORS preflight the backend blocks.
     expect(synthesisUrl()).toBe(`${BASE}/stream/synthesis`)
   })
 })

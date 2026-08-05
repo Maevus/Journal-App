@@ -27,8 +27,7 @@ async def get_trends(
         .where(JournalEntry.mood_score.isnot(None))  # type: ignore[arg-type]
         .order_by(JournalEntry.timestamp.asc())
     )
-    # An explicit start+end window wins over the `days` lookback; end is
-    # inclusive, so cover the whole end day with a half-open [start, end+1day).
+    # Explicit start+end wins over `days`; end is inclusive, so use a half-open [start, end+1day).
     custom_window = start is not None and end is not None
     if custom_window:
         query = query.where(JournalEntry.timestamp >= datetime.combine(start, time.min))
@@ -51,9 +50,8 @@ async def get_trends(
         for date, scores in sorted(daily.items())
     ]
 
-    # Return stub data when no scored entries exist yet. Skipped when a source
-    # filter or an explicit date window is set — an empty chart is honest there,
-    # a fake sinusoid is not.
+    # Stub data when no scored entries exist yet, skipped for a source filter or
+    # explicit date window — an empty chart there is honest, a fake sinusoid isn't.
     if not trends and source is None and not custom_window:
         stub_days = days or 30
         today = utcnow_naive().date()

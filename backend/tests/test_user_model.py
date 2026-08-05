@@ -1,8 +1,8 @@
-"""User identity model — the account every journal row will foreign-key to.
+"""User identity model — the account every journal row foreign-keys to.
 
-First slice of multi-user (ADR 0003). A User is minted from a Google login and
-anchored on Google's stable `sub` claim, never the mutable email; we mint our
-own `id` PK so *how* someone logged in stays decoupled from *who they are*.
+First slice of multi-user (ADR 0003). A User anchors on Google's stable `sub`
+claim, never the mutable email, and mints its own `id` PK so *how* someone
+logged in stays decoupled from *who they are*.
 """
 import pytest
 from sqlalchemy.exc import IntegrityError

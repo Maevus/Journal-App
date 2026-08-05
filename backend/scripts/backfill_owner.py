@@ -1,17 +1,12 @@
-"""Assign all unowned journal entries to a user, by email.
+"""Assign all unowned journal entries (`user_id NULL`) to a user, by email (ADR 0003).
 
-Interim bridge for pre-multi-user data (ADR 0003): rows created before the
-`user_id` column — and rows from the user-less startup sync paths until their
-owner first logs in — carry `user_id NULL`, which user-scoped reads will not
-see. Run this once after logging in, from `backend/`:
+User-scoped reads skip NULL-owner rows, so run this once after logging in,
+from `backend/`:
 
     .venv/bin/python scripts/backfill_owner.py you@gmail.com
 
-Idempotent: already-owned rows are never touched. The canonical, final backfill
-happens at the SQLite→Postgres migration; this script just keeps a live
-single-user DB usable in the meantime. (Vector ownership is no longer stamped
-here — since the pgvector move, `entry_embeddings.user_id` is set at embed time
-and vectors are rebuilt by scripts/embed_backfill.py.)
+Idempotent — already-owned rows are untouched. Vector ownership is handled
+separately by scripts/embed_backfill.py, not here.
 """
 import sys
 from pathlib import Path

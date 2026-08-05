@@ -1,18 +1,14 @@
 """The quota gate under real Postgres concurrency.
 
-Gated on TEST_DATABASE_URL, like the other Postgres suites — skipped by default.
-It exists because the gate's cross-process serialization is dialect-specific and
-SQLite can't exercise it: production runs several uvicorn workers against one
-Postgres, so `_gate_lock` (a per-process threading.Lock) protects nothing between
-them and `pg_advisory_xact_lock` is the whole defence. That statement is never
-executed by the SQLite suite, and getting it wrong fails in the worst direction —
-check_quota fails closed, so a broken lock statement doesn't loosen the gate, it
-refuses every LLM call in the app.
+Gated on TEST_DATABASE_URL like the other Postgres suites — skipped by default.
+Production runs several uvicorn workers against one Postgres, so the per-process
+`_gate_lock` protects nothing between them; `pg_advisory_xact_lock` is the real
+defence, never exercised by SQLite. It fails closed, so a broken lock statement
+just refuses every call rather than loosening the gate.
 
-Postgres also has the semantics SQLite hides: under READ COMMITTED two concurrent
-transactions can each SUM a snapshot that excludes the other's uncommitted
-reservation, so a single INSERT..SELECT would not be enough here even though it
-would be on SQLite.
+Also: under READ COMMITTED, concurrent transactions can each SUM a snapshot that
+excludes the other's uncommitted reservation — a single INSERT..SELECT isn't
+enough here, unlike on SQLite.
 """
 import os
 import threading
@@ -35,9 +31,8 @@ pytestmark = pytest.mark.skipif(
 def pg_meter(monkeypatch):
     """A real Postgres schema, pointed at by the quota gate.
 
-    The whole model metadata, not just the meter: the gate joins against the
-    key table (BYO spend is excluded from the global cap) and reads the user
-    table to pick a tier budget.
+    Full model metadata, not just the meter table: the gate also joins the key
+    table (BYO spend excluded from the cap) and reads the user table for tier budget.
     """
     import services.quota as quota
 
@@ -102,15 +97,13 @@ def test_concurrent_checks_serialize_on_postgres(pg_meter, budget):
 
 
 def test_concurrent_checks_never_overshoot_the_budget(pg_meter, budget):
-    """The property the finding was really about: not "how many callers pass"
-    but "how much they can commit us to". The old gate admitted all 20 for 20x
-    the budget; the bound now is budget + one estimate, because a call is
-    admitted on the headroom before its own claim.
+    """The property under test: not "how many callers pass" but "how much they
+    can commit us to" — the bound is budget + one estimate, since admission is
+    decided on headroom before the call's own claim lands.
 
-    $0.125 rather than a rounder $0.10 so the arithmetic is exact: a tenth is
-    not representable in binary and ten of them sum to just under $1, which
-    admits an extra caller and makes the count wobble. Money summed as floats
-    is the meter's existing convention, so the test works with it.
+    $0.125, not $0.10: a tenth isn't exactly representable in binary, so ten of
+    them can sum to just under $1 and wobble the count. Floats are the meter's
+    own convention.
     """
     budget(1.0)
     estimate = 0.125
@@ -131,14 +124,13 @@ def test_concurrent_checks_never_overshoot_the_budget(pg_meter, budget):
 
 
 def test_the_advisory_lock_alone_holds_the_gate(pg_meter, budget, monkeypatch):
-    """The test that actually pins the production guarantee.
+    """Pins the actual production guarantee.
 
-    Every other test here races threads inside ONE process, where `_gate_lock`
-    would serialize them even if the advisory lock did nothing at all — they
-    prove the statement runs, not that it works. Production is several uvicorn
-    workers, each holding its own `_gate_lock`, which therefore serializes
-    nothing between them. Neutralising it reproduces exactly that: the Postgres
-    advisory lock is the only thing left, and it has to be enough on its own.
+    Every other test here races threads in ONE process, where `_gate_lock` would
+    serialize them even with a no-op advisory lock — proving the statement runs,
+    not that it works. Production has one `_gate_lock` per worker, serializing
+    nothing between them, so neutralising it here reproduces that: the advisory
+    lock alone has to hold the gate.
     """
     import contextlib
 
@@ -159,9 +151,9 @@ def test_the_advisory_lock_alone_holds_the_gate(pg_meter, budget, monkeypatch):
 
 
 def test_the_global_cap_holds_across_concurrent_users(pg_meter, budget):
-    """The kill-switch has the same race, and a worse blast radius: it bounds
-    the worst day our key can have across everyone. Twenty different users,
-    each with their own roomy budget, must still collectively stop at the cap.
+    """The kill-switch has the same race but a worse blast radius — it bounds
+    our key's worst day across everyone. Twenty users, each with roomy budget,
+    must still collectively stop at the cap.
     """
     budget(1000.0, global_usd=1.0)
 

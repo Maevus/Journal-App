@@ -1,9 +1,7 @@
 """Integration test: a real fastembed + pgvector round-trip, no mocking.
 
-Gated on TEST_DATABASE_URL (a pgvector-enabled Postgres), like the migration
-smoke tests — skipped in the default SQLite suite. Verifies that embed_and_store
-persists real vectors and search_similar returns real semantic rankings, scoped
-per user. Loads the ONNX embedding model, so it's slower than the unit tests.
+Gated on TEST_DATABASE_URL, skipped in the default SQLite suite. Loads the
+ONNX embedding model, so it's slower than the unit tests.
 """
 import os
 from pathlib import Path

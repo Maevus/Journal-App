@@ -1,5 +1,4 @@
-"""
-Anthropic wrapper: async streaming, Pydantic structured output,
+"""Anthropic wrapper: async streaming, Pydantic structured output,
 exponential backoff (max 3 retries), per-call token + cost logging.
 """
 import asyncio
@@ -21,9 +20,8 @@ T = TypeVar("T", bound=BaseModel)
 
 logger = logging.getLogger(__name__)
 
-# Approximate pricing as ($ input, $ output) per token, keyed by model. Unknown
-# models fall back to the default (opus) rates. This whole table becomes per-user
-# config once users bring their own API key and choose their own model.
+# Approximate pricing as ($ input, $ output) per token, keyed by model.
+# Unknown models fall back to the default (opus) rates.
 _PRICING: dict[str, tuple[float, float]] = {
     "claude-opus-4-8": (5.0 / 1_000_000, 25.0 / 1_000_000),  # $5 in / $25 out per 1M
     "claude-haiku-4-5": (1.0 / 1_000_000, 5.0 / 1_000_000),  # $1 in / $5 out per 1M
@@ -41,30 +39,26 @@ _RETRYABLE = (
 def resolve_model(*, user_id: Optional[int], on_own_key: Optional[bool] = None) -> str:
     """Which model a generation call for `user_id` runs on (ADR 0003, F3).
 
-    The per-user resolution step that replaces the prompt-YAML model choice
-    for user-facing generation (synthesis, chat, mood scoring).
-    Task-fixed internal calls (OCR, date-parse, condense) still pass their own
-    model string and never reach here.
+    Replaces the prompt-YAML model choice for user-facing generation
+    (synthesis, chat, mood scoring). Task-fixed internal calls (OCR,
+    date-parse, condense) pass their own model string and never reach here.
 
-    `user_id` is required keyword-only, mirroring check_quota / _log_usage, so
-    resolution joins quota and metering as the third per-call step. None means
-    unowned system work, which no longer generates — it raises here rather than
-    silently spending the app key on a model nobody owns.
+    `user_id` is required keyword-only, mirroring check_quota / _log_usage.
+    None means unowned system work, which no longer generates — raises here
+    rather than silently spending the app key on a model nobody owns.
 
-    `on_own_key`: the post-F5 lookup consolidation — an entry point that has
-    already read the key row (resolve_api_key) passes its answer; None (routers,
-    which haven't looked) keeps the self-serve lookup.
+    `on_own_key`: pass it if already known (resolve_api_key), to skip a
+    redundant key-row read; None keeps the self-serve lookup.
     """
     if user_id is None:
         raise ValueError("no owner: unowned system work does not generate (F3)")
     from services.auth import is_demo_user_id  # local import: avoids an import cycle
 
     with Session(engine) as session:
-        # The demo user runs the showcase on the premium model regardless of key.
+        # Demo user runs the showcase on the premium model regardless of key.
         if is_demo_user_id(session, user_id):
             return config.DEMO_MODEL
-        # F4: a user on their own key pays their own way, so they get the premium
-        # model, not the free-tier default — the first-class account payoff.
+        # F4: a BYO-key user pays their own way, so they get the premium model.
         if on_own_key is None:
             on_own_key = key_store.has_user_key(session, user_id=user_id)
     return config.BYO_KEY_MODEL if on_own_key else config.FREE_TIER_MODEL
@@ -73,9 +67,8 @@ def resolve_model(*, user_id: Optional[int], on_own_key: Optional[bool] = None) 
 def resolve_api_key(*, user_id: Optional[int]) -> Optional[str]:
     """The user's own decrypted API key, or None if they haven't set one (F4).
 
-    None means "fall back to the app key" — the env fallback lives in
-    _async_client so the app-key default is defined in exactly one place. A BYO
-    key flows straight into client construction and is never logged.
+    None falls back to the app key (the default lives in _async_client, in
+    one place). A BYO key flows straight into client construction, never logged.
     """
     if user_id is None:
         return None
@@ -91,10 +84,10 @@ def _async_client(api_key: Optional[str] = None) -> anthropic.AsyncAnthropic:
 async def key_is_valid(raw_key: str) -> bool:
     """Whether a provider key authenticates (F4 — validate a BYO key on save).
 
-    Uses models.list(), which authenticates the key but generates nothing, so
-    validation costs no output tokens. A rejected key raises AuthenticationError
-    (→ False); other errors (network, rate limit) propagate so the caller can
-    distinguish "bad key" from "couldn't check right now".
+    Uses models.list(), which authenticates but generates nothing (no output
+    tokens). A rejected key raises AuthenticationError (→ False); other
+    errors propagate so the caller can distinguish "bad key" from "couldn't
+    check right now".
     """
     try:
         await _async_client(raw_key).models.list()
@@ -111,12 +104,10 @@ def _prompt_text(system: str, messages: list[dict]) -> str:
 
 
 def _worst_case_cost(model: str, *, prompt_text: str, max_tokens: int) -> float:
-    """The most this call could possibly cost: the input we're sending plus an
-    output that runs all the way to `max_tokens`.
-
-    The quota gate has to claim headroom before a single token exists, so it
-    claims the ceiling. Erring high is the safe direction — the difference is
-    handed back the moment the call ends and the real cost is metered.
+    """The most this call could possibly cost: input sent plus output running
+    all the way to `max_tokens`. The quota gate claims this ceiling as
+    headroom, erring high; the difference is handed back once the real cost
+    is metered.
     """
     input_cost, output_cost = _PRICING.get(model, _DEFAULT_PRICING)
     return _estimate_tokens(prompt_text) * input_cost + max_tokens * output_cost
@@ -131,30 +122,26 @@ def _pre_call(
 ) -> tuple[str, anthropic.AsyncAnthropic, Optional[int]]:
     """The pre-call policy steps both entry points share, on ONE key read.
 
-    resolve_api_key is the single "does this user have a key" read; resolve_model
-    (when the model isn't task-fixed) and check_quota reuse its answer instead of
-    each re-reading the row (the consolidation flagged at F4). Every read here
-    runs BEFORE any API traffic and fails closed — a key row we can't read is a
-    call we don't make, surfaced as the same refusal type callers already handle
-    (the F2 stance; this also turns an APP_ENCRYPTION_KEY misconfiguration into
-    a clean refusal instead of a mid-stream 500).
+    resolve_api_key answers "does this user have a key" once; resolve_model
+    and check_quota reuse it instead of each re-reading the row (F4). Every
+    read here runs BEFORE any API traffic and fails closed — a key row we
+    can't read is a call we don't make, refused the same way callers already
+    handle (the F2 stance).
 
-    Returns the reservation id the gate issued, which the caller MUST release
-    when the call ends — the third element exists to make that obligation
-    impossible to overlook at the call site.
+    Returns the reservation id, which the caller MUST release when the call
+    ends — kept as the third element so that's hard to overlook.
     """
     try:
         api_key = resolve_api_key(user_id=user_id)  # F4: own key if set
     except Exception as exc:
         logger.exception("key resolution failed — refusing the call (fails closed)")
         raise QuotaExceededError("key resolution unavailable") from exc
-    # F3: an unspecified model resolves per-user (free→haiku, demo→opus). An
-    # explicit model (task-fixed callers: OCR, date-parse, condense) is honored.
+    # F3: an unspecified model resolves per-user; an explicit one (task-fixed
+    # callers: OCR, date-parse, condense) is honored as-is.
     if model is None:
         model = resolve_model(user_id=user_id, on_own_key=api_key is not None)
-    # The F2 money gate: raises QuotaExceededError before any API traffic. The
-    # estimate is what makes it hold under concurrency — pricing lives here, so
-    # the gate is handed dollars rather than growing a pricing table of its own.
+    # F2 money gate: raises QuotaExceededError before any API traffic.
+    # Pricing lives here so the gate is handed dollars, not a model string.
     reservation = check_quota(
         user_id=user_id,
         on_own_key=api_key is not None,
@@ -164,9 +151,9 @@ def _pre_call(
 
 
 def _estimate_tokens(text: str) -> int:
-    """Rough token count (~4 chars/token) for metering a stream that was aborted
-    before Anthropic reported real usage. Rounds up — over-charging an abandoned
-    call is safer than under-charging it."""
+    """Rough token count (~4 chars/token) for metering a stream aborted
+    before Anthropic reported real usage. Rounds up — over-charging an
+    abandoned call is safer than under-charging it."""
     return max(1, (len(text) + 3) // 4)
 
 
@@ -180,15 +167,13 @@ def _log_usage(
 ) -> None:
     """Meter one finished LLM call: operator log line + a persisted LLMUsage row.
 
-    Both LLM entry points end here, so this is the spend choke point — an
-    unmetered call is structurally impossible (ADR 0003 freemium). The meter
-    write must never kill the call it's metering: the tokens are already
-    delivered (and paid for), so a failed INSERT logs loudly and moves on.
-    Quota enforcement (F2) fails closed instead — but it runs BEFORE the call.
+    Both LLM entry points end here, so an unmetered call is structurally
+    impossible (ADR 0003 freemium). Must never kill the call it's metering —
+    tokens are already delivered and paid for, so a failed INSERT logs
+    loudly and moves on (quota's F2 fails closed instead, but before the call).
 
-    Settling the call's `reservation` belongs here, in the same transaction as
-    the row that supersedes it: estimate out, truth in, with no instant where a
-    concurrent checker can see neither.
+    Settles the call's `reservation` in the same transaction as the row that
+    supersedes it, so no concurrent checker sees neither.
     """
     input_cost, output_cost = _PRICING.get(model, _DEFAULT_PRICING)
     cost = input_tokens * input_cost + output_tokens * output_cost
@@ -211,9 +196,8 @@ def _log_usage(
             session.commit()
     except Exception:  # noqa: BLE001
         logger.exception("usage meter write failed (the LLM call itself succeeded)")
-        # The meter row is lost, so the reservation is now the only thing
-        # standing in for this call's spend. Leave it — RESERVATION_TTL retires
-        # it, which errs toward over-counting, the safe direction for a gate.
+        # Reservation is now the only record of this call's spend. Leave it —
+        # RESERVATION_TTL retires it, erring toward over-counting.
 
 
 async def stream_text(
@@ -226,29 +210,25 @@ async def stream_text(
     *,
     user_id: Optional[int],
 ) -> AsyncGenerator[str, None]:
-    """
-    Yield text tokens from the LLM with exponential-backoff retry.
+    """Yield text tokens from the LLM with exponential-backoff retry.
 
     Pass either a single `prompt` (wrapped as one user turn) or a full
-    `messages` history (for multi-turn callers like chat). Exactly one of the
-    two must be given; `messages` wins if both are present.
+    `messages` history (multi-turn, e.g. chat) — exactly one must be given;
+    `messages` wins if both are present.
 
-    `user_id` is required keyword-only (the house pattern): every call must
-    state who it's billed to. Explicit None = system work — metered for
-    visibility, charged to nobody's quota.
+    `user_id` is required keyword-only: every call states who it's billed
+    to. Explicit None = system work, metered but charged to no quota.
 
-    Retry fires on connection/rate-limit errors before the first token is
-    delivered.  Mid-stream errors propagate without retry — tokens already
-    yielded cannot be un-sent.
+    Retry fires on connection/rate-limit errors before the first token.
+    Mid-stream errors propagate without retry — yielded tokens can't be un-sent.
     """
     if messages is None:
         if prompt is None:
             raise ValueError("stream_text requires either `prompt` or `messages`")
         messages = [{"role": "user", "content": prompt}]
-    # One key read serves model resolution, the quota gate, and the client (see
-    # _pre_call). Runs once per call, not per retry — a retry continues the call
-    # already allowed. The one `model` variable then flows to both the API call
-    # and _log_usage, so what's billed is always what ran.
+    # One key read serves model resolution, the quota gate, and the client
+    # (_pre_call), once per call — a retry continues the call already
+    # allowed. `model` then flows to both the API call and _log_usage.
     model, client, reservation = _pre_call(
         model,
         user_id=user_id,
@@ -257,12 +237,10 @@ async def stream_text(
     )
     last_err: Exception | None = None
 
-    # A client that hangs up mid-stream unwinds this generator at `yield`, so
-    # get_final_message() is never reached and the call would be metered as $0
-    # while Anthropic still bills it. That makes DEMO_DAILY_USD and
-    # GLOBAL_DAILY_USD bypassable by disconnecting early, so the partial has to
-    # be metered from a finally. The estimate deliberately errs high: charging
-    # slightly too much for an abandoned call is the safe direction.
+    # A hang-up mid-stream unwinds this generator at `yield`, so
+    # get_final_message() never runs and the call would meter as $0 while
+    # Anthropic still bills it — bypassing the daily caps by disconnecting
+    # early. The partial is metered from a finally instead, erring high.
     metered = False
     started = False
     delivered: list[str] = []
@@ -314,11 +292,10 @@ async def stream_text(
 
         raise last_err  # type: ignore[misc]
     finally:
-        # Three ways out, and the reservation has to be settled on all of them.
-        # `metered` means _log_usage already released it alongside the real
-        # spend; a started-but-unmetered stream is the abort path, where the
-        # partial metering does the same; a call that never started spent
-        # nothing, so its claim is simply handed back.
+        # Three ways out, reservation settled on all: `metered` means
+        # _log_usage already released it; started-but-unmetered is the abort
+        # path (partial metering does the same); never-started just hands
+        # the claim back.
         if started and not metered:
             _meter_partial()
         elif not metered:
@@ -335,9 +312,8 @@ async def structured_output(
     *,
     user_id: Optional[int],
 ) -> T:
-    """
-    Return a Pydantic model instance validated against the LLM's tool-use output.
-    Retries with exponential backoff on transient errors.
+    """Return a Pydantic model instance validated against the LLM's tool-use
+    output. Retries with exponential backoff on transient errors.
 
     `user_id`: required keyword-only billing attribution — see stream_text.
     """
@@ -397,8 +373,7 @@ async def structured_output(
 
         raise RuntimeError("structured_output exhausted retries without raising")
     finally:
-        # Exhausted retries and a schema that never validated both leave here
-        # without a metered call — nothing was billed, so hand the claim back
-        # rather than let it sit until the TTL.
+        # Exhausted retries or a schema that never validated leaves here
+        # unmetered — hand the claim back rather than let it sit until the TTL.
         if not metered:
             release_reservation(reservation)

@@ -1,10 +1,8 @@
-// Registers @testing-library/jest-dom matchers (e.g. toBeInTheDocument) on
-// Vitest's expect, and their TypeScript types.
+// Registers jest-dom matchers (e.g. toBeInTheDocument) on Vitest's expect.
 import '@testing-library/jest-dom/vitest'
 
-// jsdom has no ResizeObserver; recharts' ResponsiveContainer requires one.
-// A no-op stub lets chart-bearing components (UsagePanel, MoodChart) render
-// in tests — the chart itself stays 0×0, so tests assert on text, not SVG.
+// jsdom lacks ResizeObserver, which recharts' ResponsiveContainer needs.
+// This no-op stub lets chart components render at 0×0 — assert on text, not SVG.
 class ResizeObserverStub {
   observe() {}
   unobserve() {}

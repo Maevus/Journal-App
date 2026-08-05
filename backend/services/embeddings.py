@@ -1,16 +1,9 @@
 """Vector store backed by Postgres + pgvector.
 
-Embeddings are generated locally with fastembed (all-MiniLM-L6-v2, 384-d, ONNX —
-no torch) and stored in the Postgres-only `entry_embeddings` table (created by the
-Alembic migration, kept out of SQLModel.metadata so SQLite never tries to build a
-`vector` column). Off Postgres — the SQLite unit suite and the interim SQLite demo
-— the store degrades to a no-op / empty result: those paths either mock at the
-retrieval boundary or simply have no semantic layer yet (the demo regains it when
-it moves onto Postgres as a seed user).
-
-The public interface is unchanged from the Chroma version — `embed_and_store` +
-`search_similar` with the same signatures and the same `[(entry_id, similarity)]`
-return — so `retrieval.hybrid_search` and `ingestion` need no changes.
+Embeddings come from fastembed (all-MiniLM-L6-v2, 384-d, ONNX — no torch) into
+the Postgres-only `entry_embeddings` table (kept out of SQLModel.metadata so
+SQLite never tries to build a `vector` column). Off Postgres, `embed_and_store`/
+`search_similar` no-op / return empty.
 """
 import logging
 from typing import List, Tuple
@@ -22,33 +15,20 @@ from models.journal import engine
 
 logger = logging.getLogger(__name__)
 
-# 384-d, matches the model Chroma's DefaultEmbeddingFunction used, so semantics
-# carry over. The model is downloaded/cached on first use (bake it into the
-# deploy image to avoid a cold-start fetch).
+# 384-d, chosen to match prior stored embeddings' semantics. Downloaded/cached
+# on first use — bake into the deploy image to avoid a cold-start fetch.
 _MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 _embedder = None
 
-# How the ANN index behaves when the query also filters (it always does — every
-# search is scoped to one user).
-#
-# The HNSW index covers `embedding` alone, so a plain index scan walks the
-# GLOBALLY nearest vectors and `WHERE user_id` then discards whatever isn't
-# ours. Nothing makes the scan go back for more, so a user whose entries sit
-# outside that candidate set gets fewer rows than they asked for — or none at
-# all, which is indistinguishable from "nothing matched". Small tables hide this
-# completely: the planner sorts a btree scan instead and recall is perfect right
-# up until the corpus grows enough to prefer the ANN plan, at which point search
-# quietly stops working for everyone but the heaviest user.
-#
-# Iterative scan (pgvector 0.8+) is the fix: the scan keeps going until `limit`
-# rows actually survive the filter. `strict_order` rather than `relaxed_order`
-# because search_similar promises most-similar-first and hybrid_search fuses on
-# these scores — approximately-ordered results would corrupt the ranking rather
-# than just reorder it.
-#
-# Requires pgvector >= 0.8. On an older extension this SET raises rather than
-# silently degrading, which is deliberate: a loud failure is discoverable, and
-# the bug it replaces is not.
+# Every search filters by user_id, but the HNSW index covers `embedding` alone:
+# a plain scan walks the globally nearest vectors and the filter discards the
+# rest, so a user outside that candidate set gets too few rows (or none) — a
+# recall bug invisible on small tables, appearing only once the corpus grows
+# enough to favor the ANN plan over a btree scan. Iterative scan (pgvector
+# >= 0.8) fixes this by scanning until `limit` rows survive the filter;
+# `strict_order` (not `relaxed_order`) keeps results exactly most-similar-first,
+# since hybrid_search fuses on these scores. Requires pgvector >= 0.8 — older
+# extensions raise here instead of silently degrading.
 _ITERATIVE_SCAN = "strict_order"
 
 
@@ -82,9 +62,8 @@ def _to_pgvector(vec: List[float]) -> str:
 def embed_and_store(entry_id: int, content: str, *, user_id: int) -> None:
     """Embed one entry and upsert it into the vector store, owner-stamped.
 
-    `user_id` is required and non-null — every entry has an owner since the
-    Postgres migration, so there are no unowned vectors. No-ops off Postgres
-    (SQLite tests / the interim demo have no pgvector).
+    `user_id` is required — every entry has an owner, so there are no unowned
+    vectors. No-ops off Postgres.
     """
     if not _on_postgres():
         return
@@ -104,11 +83,10 @@ def embed_and_store(entry_id: int, content: str, *, user_id: int) -> None:
 def search_similar(query: str, limit: int = 10, *, user_id: int) -> List[Tuple[int, float]]:
     """Return [(entry_id, similarity)] of `user_id`'s entries, most similar first.
 
-    Similarity is cosine (`1 - (embedding <=> q)`, pgvector's cosine distance),
-    ~[0, 1] over the normalized MiniLM space. `user_id` is required and
-    keyword-only: an unscoped ANN query over a journal must be inexpressible, and
-    a transposed arg can't bind to the adjacent int `limit` (ADR 0003). The
-    `WHERE user_id` filter is defense in depth — SQL stays the isolation boundary
+    Similarity is cosine (`1 - (embedding <=> q)`), ~[0, 1] over the normalized
+    MiniLM space. `user_id` is required and keyword-only so an unscoped query is
+    inexpressible and can't be transposed with `limit` (ADR 0003). The
+    `WHERE user_id` filter is defense in depth — SQL is the isolation boundary
     of record in `hybrid_search`. Empty off Postgres.
     """
     if not _on_postgres():

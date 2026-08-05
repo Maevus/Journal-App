@@ -1,9 +1,8 @@
 """Per-user isolation — schema + per-user dedup (ADR 0003).
 
-Identical text from two users hashes identically, so a *global*
-content-hash dedup would silently drop the second user's entry. The dedup
-key is per-user — composite (user_id, content_hash) — keeping the hash a
-pure content fingerprint and user_id an orthogonal scoping dimension.
+Identical text from two users hashes identically, so a global content-hash
+dedup would silently drop the second user's entry — the dedup key is
+composite (user_id, content_hash).
 """
 import pytest
 from sqlmodel import Session, select
@@ -48,10 +47,9 @@ def test_writes_stamp_the_owner(session):
 
 
 def test_ownerless_ingest_is_skipped(session):
-    """Startup Keep sync / GoodNotes scan run outside a request. Since the
-    Postgres migration JournalEntry.user_id is NOT NULL, so a sync whose owner
-    can't be resolved yet (its account hasn't logged in) ingests nothing and
-    defers — no orphaned NULL-owner row."""
+    """Startup Keep/GoodNotes sync runs outside a request; user_id is NOT
+    NULL, so an unresolvable owner (not yet logged in) ingests nothing rather
+    than leaving an orphaned NULL-owner row."""
     stats, entries = ingest_entries(["Legacy note."], "text", session)
 
     assert entries == []
@@ -89,9 +87,8 @@ def test_demo_mode_auto_logs_in_demo_user(client, monkeypatch):
 
 
 def test_demo_user_cannot_ingest(client, monkeypatch):
-    """The demo is a read-only showcase: a signed-out visitor (resolved to the
-    demo user under PUBLIC_DEMO) is refused writes to the shared demo journal, so
-    one visitor can't pollute what the next one sees."""
+    """The demo is read-only: a signed-out visitor (resolved to the demo user
+    under PUBLIC_DEMO) is refused writes, so one visitor can't pollute the next."""
     import config
 
     monkeypatch.setattr(config, "PUBLIC_DEMO", True)
@@ -104,9 +101,9 @@ def test_demo_user_cannot_ingest(client, monkeypatch):
 
 
 def test_sync_owner_resolves_by_google_email(session, monkeypatch):
-    """The Keep/GoodNotes connectors are env-configured for exactly one Google
-    account (GOOGLE_EMAIL) — pre-multi-user legacy. Their entries belong to
-    that account's user once it exists; before then they stay unowned."""
+    """Keep/GoodNotes are env-configured for one Google account (GOOGLE_EMAIL,
+    pre-multi-user legacy); entries belong to that user once it exists, else
+    stay unowned."""
     from models.user import User
     from services.ingestion import _resolve_sync_owner
 
@@ -266,9 +263,9 @@ def test_hybrid_search_is_scoped_to_the_user(session, monkeypatch):
 
 
 def test_retrieval_scopes_the_vector_query_itself(session, monkeypatch):
-    """Defense in depth: hybrid_search must pass user_id down into the pgvector
-    query, not just drop foreign ids at fusion — so the vector store enforces
-    isolation too and the semantic pool isn't wasted on other users."""
+    """Defense in depth: hybrid_search must pass user_id into the pgvector
+    query too, not just drop foreign ids at fusion — so the vector store
+    enforces isolation as well."""
     import services.retrieval as retrieval
 
     ingest_entries(["climbing rocks"], "text", session, user_id=2)

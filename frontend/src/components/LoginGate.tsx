@@ -1,10 +1,8 @@
 import { loginUrl } from '../api/client'
 
-/** Full-screen logged-out state for a private instance: with demo access off,
- *  every data route 401s without a session, so there is nothing to render behind
- *  it — the gate IS the app when logged out. When demo access is on (PUBLIC_DEMO,
- *  or APP_MODE=demo), /auth/me resolves to the demo user instead, so a signed-out
- *  visitor lands in the demo (with the DemoBanner) and never sees this gate. */
+/** Full-screen logged-out state: with demo access off, every data route
+ *  401s, so this gate IS the app. With demo access on (PUBLIC_DEMO or
+ *  APP_MODE=demo), a signed-out visitor resolves to the demo user instead and never sees this. */
 export function LoginGate() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-paper font-sans text-ink">

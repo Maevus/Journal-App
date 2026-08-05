@@ -12,10 +12,8 @@ interface StreamingPanelProps {
 
 export function StreamingPanel({ range, source }: StreamingPanelProps) {
   const { text, error, quota, rateLimited, isStreaming, start, abort } = useSSE()
-  // Both refusal frames are notices, not failures: the backend declined before
-  // spending (over budget) or because we're asking too fast. Only one can arrive
-  // per stream, so they share one banner — and it shows the *server's* wording,
-  // which knows the actual budget/window.
+  // Refusal, not failure: backend declined before spending (quota) or the
+  // caller's too fast (rate limit). Only one per stream; shows the server's own wording (it knows the budget/window).
   const refusal = quota ?? rateLimited
   const scopeLabel = source.value ? `${range.label} · ${source.label}` : range.label
   // Which period/source the visible text was generated for — synthesis costs an

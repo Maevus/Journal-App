@@ -1,35 +1,11 @@
-"""Per-identity rate limiting: how often, as opposed to how much.
+"""Per-identity rate limiting: how often, not how much (services/quota.py
+bounds spend; BYO-key users are exempt there but not here — this protects
+the process, not the wallet).
 
-The sibling of services/quota.py, and deliberately not the same thing. Quota
-bounds what a caller can make us *spend*; this bounds what a caller can make us
-*do*. The two do not substitute for each other in either direction — a BYO-key
-user is quota-exempt (their money, their key) but must still be limited, because
-what a limit protects here is our process, our connection pool and our Anthropic
-concurrency, not our wallet. Conversely a $0-budget user is already refused by
-quota but can still hammer `/search`, which spends CPU on a local ONNX encode
-and no money at all.
-
-Three decisions worth knowing before changing anything here:
-
-**Route dependency, not middleware.** Starlette's `add_middleware` prepends, so
-a limiter added the natural way in main.py ends up *outside* `CORSMiddleware`
-and its 429s ship with no `Access-Control-Allow-Origin` header. The browser
-then reports the refusal as an opaque network failure and the SPA cannot tell a
-rate limit from the server being down. A route dependency runs inside the
-middleware stack, so the refusal is a normal response with normal CORS headers.
-`test_rate_limit_routes.py` pins that.
-
-**Named tiers, not numbers at call sites.** A route declares which tier it
-belongs to and the budget lives in config, so the whole policy is one reviewable
-table rather than a scatter of literals, and an operator can retune a limit
-without a code change.
-
-**Fails open.** The inverse of the quota gate, which fails closed because the
-money it guards is not yet spent so refusing costs nothing. A limiter that
-refuses everything when its table is unreachable is a bigger outage than the
-abuse it prevents — and every route it guards needs that same database anyway,
-so a store that cannot answer is already a total outage by other means. It logs
-loudly instead.
+Route dependency, not middleware (middleware sits outside CORSMiddleware, so
+429s would lose their CORS header — test_rate_limit_routes.py pins this).
+Named tiers keep budgets in one config table. Fails open on a broken store,
+logging loudly, unlike quota's fail-closed.
 """
 import json
 import logging
@@ -58,40 +34,30 @@ TIER_KEYS = "keys"
 TIER_SEARCH = "search"
 TIER_AUTH = "auth"
 
-# (suffix used in the bucket key, human word for the refusal message, seconds).
-# Shortest first, and the check returns on the first refusal — so a caller
-# stopped by the minute limit has not also spent an hour slot. Otherwise a
-# client retrying in a tight loop (exactly what a 429 invites) would burn its
-# own hourly budget while being told to wait.
+# (bucket-key suffix, refusal-message word, seconds). Shortest window first:
+# a caller stopped by the minute limit shouldn't also burn its hourly budget.
 _WINDOWS: tuple[tuple[str, str, int], ...] = (
     ("min", "minute", 60),
     ("hr", "hour", 3600),
 )
 
-# Expired rows are pruned opportunistically on the request path, at most this
-# often per process. No scheduler: APScheduler is optional here and off by
-# default, and a limiter that silently stops pruning when the scheduler is
-# disabled is a slow disk leak. The table is small and the delete is one indexed
-# range scan, so the cost lands on roughly one request every five minutes.
+# Pruned opportunistically on the request path (no scheduler dependency),
+# at most this often per process — a cheap indexed delete either way.
 _SWEEP_EVERY = timedelta(minutes=5)
 _last_swept: Optional[datetime] = None
 
-# Rows outlive their window by this much before the sweep takes them. Pure
-# paranoia about clock skew between workers: deleting a row a live window still
-# needs would hand its owner a free reset.
+# Rows outlive their window by this much before sweeping, guarding against
+# clock skew between workers deleting a still-live window.
 _SWEEP_GRACE = timedelta(minutes=5)
 
-# Naive UTC throughout, like every other timestamp in this app (see clock.py),
-# so window arithmetic never touches a timezone or a local-time `timestamp()`.
+# Naive UTC (see clock.py) so window arithmetic never touches a timezone.
 _EPOCH = datetime(1970, 1, 1)
 
 
 @dataclass(frozen=True)
 class RateLimitDecision:
-    """The verdict for one request. Streaming routes need the refusal as a
-    value rather than an exception, because their refusal has to ride inside a
-    200 response body — so the whole limiter returns one of these and only the
-    non-streaming dependency turns it into a status code."""
+    """The verdict for one request. Returned as a value (not raised) since
+    streaming routes must carry a refusal inside a 200 body."""
 
     tier: str
     refused: bool
@@ -100,10 +66,8 @@ class RateLimitDecision:
 
 
 def _limits(tier: str) -> tuple[int, int]:
-    """(per-minute, per-hour) for `tier`, read from `config` at call time rather
-    than captured at import. Tests monkeypatch these knobs, and an operator
-    reading them from the environment gets the value they set, not the value
-    that existed when the module graph was first imported."""
+    """(per-minute, per-hour) for `tier`, read from `config` at call time (not
+    import time) so tests can monkeypatch and operators see live env values."""
     name = tier.upper()
     return (
         getattr(config, f"RATE_LIMIT_{name}_PER_MIN"),
@@ -114,11 +78,9 @@ def _limits(tier: str) -> tuple[int, int]:
 def _window_start(now: datetime, seconds: int) -> datetime:
     """Floor `now` to the start of its fixed window.
 
-    Aligned to the clock, not to the caller's first request: that is what makes
-    the counter a single row per (bucket, window), which in turn is what makes
-    the increment a single atomic statement. The cost is the classic fixed-window
-    boundary burst — a caller can spend a full window's budget just before a
-    boundary and another just after — which is precisely why every expensive
+    Aligned to the clock (not the caller's first request) so the counter is
+    one row per (bucket, window) and the increment is a single atomic
+    statement. Trade-off: the classic boundary-burst, which is why every
     tier also carries an hour window.
     """
     elapsed = int((now - _EPOCH).total_seconds())
@@ -126,22 +88,17 @@ def _window_start(now: datetime, seconds: int) -> datetime:
 
 
 def _bump(session: Session, *, bucket: str, window_start: datetime, expires_at: datetime) -> int:
-    """Increment one counter and return its new value, in one statement.
-
-    `INSERT … ON CONFLICT (bucket, window_start) DO UPDATE SET hits = hits + 1
-    RETURNING hits`. The increment *is* the read, so two callers racing on the
-    same bucket cannot both observe the pre-increment value — the second blocks
-    on the first's row lock and then sees its write. No advisory lock, no
-    application-level mutex, and nothing that behaves differently across
-    processes.
+    """Increment one counter and return its new value, in one statement:
+    `INSERT … ON CONFLICT DO UPDATE SET hits = hits + 1 RETURNING hits`. The
+    increment is the read, so racing callers serialize on the row lock — no
+    advisory lock or app-level mutex needed.
     """
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
     else:
-        # SQLite (tests, standalone demo). Any other dialect would need its own
-        # upsert spelling; there isn't one, and raising here surfaces as the
-        # fail-open path in check_rate_limit rather than as a wrong answer.
+        # SQLite (tests, standalone demo). An unhandled dialect raises here,
+        # which surfaces as the fail-open path in check_rate_limit.
         from sqlalchemy.dialects.sqlite import insert
 
     table = RateLimitCounter.__table__
@@ -150,16 +107,15 @@ def _bump(session: Session, *, bucket: str, window_start: datetime, expires_at: 
         .values(bucket=bucket, window_start=window_start, hits=1, expires_at=expires_at)
         .on_conflict_do_update(
             index_elements=[table.c.bucket, table.c.window_start],
-            # The unqualified column reads the EXISTING row's value (the proposed
-            # one would be `excluded.hits`), which is what makes this an
-            # increment rather than a reset to 1.
+            # Unqualified `table.c.hits` reads the EXISTING row (not
+            # `excluded.hits`), making this an increment, not a reset to 1.
             set_={"hits": table.c.hits + 1},
         )
         .returning(table.c.hits)
     )
     hits = session.execute(statement).scalar_one()
-    # Commit immediately: the count must be durable and visible to the other
-    # workers before this request does any of the work the count was authorising.
+    # Commit immediately — durable and visible to other workers before this
+    # request does the work the count authorized.
     session.commit()
     return hits
 
@@ -167,9 +123,8 @@ def _bump(session: Session, *, bucket: str, window_start: datetime, expires_at: 
 def sweep_expired(session: Session, *, now: Optional[datetime] = None) -> int:
     """Delete counters whose window closed. Returns the row count.
 
-    Every distinct caller mints rows, so without this the table grows with the
-    size of the internet. A counter is meaningless the moment its window closes,
-    so there is nothing to archive — this is a plain indexed range delete.
+    Every distinct caller mints a row; a closed window is meaningless, so
+    this is a plain indexed range delete, not an archive.
     """
     now = now or utcnow_naive()
     result = session.execute(
@@ -185,8 +140,8 @@ def _maybe_sweep(session: Session, now: datetime) -> None:
     global _last_swept
     if _last_swept is not None and now - _last_swept < _SWEEP_EVERY:
         return
-    # Stamped before the attempt, so a persistently failing sweep retries on the
-    # interval instead of on every single request.
+    # Stamped before the attempt, so a failing sweep retries on schedule,
+    # not on every request.
     _last_swept = now
     try:
         sweep_expired(session, now=now)
@@ -205,10 +160,8 @@ def check_rate_limit(
 ) -> RateLimitDecision:
     """Count this request against `identity`'s budget for `tier` and rule on it.
 
-    `identity` is opaque here — building it (and getting the PUBLIC_DEMO case
-    right) is `caller_identity`'s job, so this function has exactly one concern.
-    A window whose limit is 0 is not enforced and not even counted: 0 is the
-    per-tier off switch, and a disabled window should not still be writing rows.
+    `identity` is opaque here — building it is `caller_identity`'s job. A
+    limit of 0 disables that window entirely (not counted, not enforced).
     """
     now = now or utcnow_naive()
     try:
@@ -226,8 +179,7 @@ def check_rate_limit(
                 expires_at=window_start + timedelta(seconds=seconds) + _SWEEP_GRACE,
             )
             if hits > limit:
-                # Round up, and never below 1: `Retry-After: 0` reads as "retry
-                # immediately", which is a spin loop dressed as politeness.
+                # Never below 1 — `Retry-After: 0` reads as "retry immediately".
                 retry_after = max(
                     1,
                     math.ceil((window_start + timedelta(seconds=seconds) - now).total_seconds()),
@@ -248,8 +200,8 @@ def check_rate_limit(
         _maybe_sweep(session, now)
         return RateLimitDecision(tier=tier, refused=False)
     except Exception:  # noqa: BLE001
-        # Fails OPEN — see the module docstring. Loud, because a limiter that
-        # silently stops limiting is indistinguishable from one that works.
+        # Fails OPEN (see module docstring); logs loudly since silent failure
+        # here is indistinguishable from working.
         logger.exception("rate limit check failed for %s on %s — allowing the request",
                          identity, tier)
         try:
@@ -262,26 +214,21 @@ def check_rate_limit(
 def caller_identity(request: Request, db: Session, *, by_ip_only: bool = False) -> str:
     """The bucket this request counts against: `user:{id}` or `ip:{addr}`.
 
-    Resolves the session cookie itself rather than depending on
-    `get_current_user`, and that is the load-bearing detail. Under
-    `PUBLIC_DEMO=1` `get_current_user` resolves EVERY anonymous visitor to the
-    same seeded demo `User` row (services/auth.py), so keying on the user id it
-    returns would give the entire internet one shared bucket — one abuser would
-    then rate-limit every other visitor out of the demo. For anonymous traffic
-    the IP is the only discriminator there is. Resolving the cookie directly also
-    means this works on `/auth/login`, where there is no user yet and
-    `get_current_user` would 401.
+    Resolves the session cookie directly, not via `get_current_user` — under
+    PUBLIC_DEMO=1 that resolves every anonymous visitor to the same demo
+    User, which would give the whole internet one shared bucket. IP is the
+    only real discriminator for anonymous traffic; this also works on
+    `/auth/login`, where `get_current_user` would 401.
 
-    `by_ip_only` is for the login routes: throttling the handshake per session
-    cookie would be circular, since the point of the handshake is to get one.
+    `by_ip_only` is for login routes, where throttling by session cookie
+    would be circular — the handshake's whole point is to get one.
     """
     if not by_ip_only:
         from services.auth import SESSION_COOKIE, resolve_session  # local: import cycle
 
         user = resolve_session(db, request.cookies.get(SESSION_COOKIE))
         if user is not None:
-            # A BYO-key holder lands here too. They are exempt from quota (their
-            # money) and deliberately NOT exempt from this (our process).
+            # Exempt from quota (their money), not from this (our process).
             return f"user:{user.id}"
 
     from services.client_ip import client_ip  # local: keeps the import graph flat
@@ -292,12 +239,10 @@ def caller_identity(request: Request, db: Session, *, by_ip_only: bool = False) 
 def sse_rate_limit_frame(decision: RateLimitDecision) -> str:
     """The named SSE frame both LLM streams emit on a rate-limit refusal.
 
-    The twin of `quota.sse_quota_frame`, for the identical reason: `EventSource`
-    cannot read the body of a non-200 response and reconnects on its own, so a
-    real 429 would reach the user as a silent reconnect loop under a generic
-    error. The refusal therefore rides inside a 200 stream. The event name and
-    the three payload keys are a contract with the frontend — this is the one
-    place they are defined.
+    Rides inside a 200 (like `quota.sse_quota_frame`) because `EventSource`
+    can't read a non-200 body and just reconnects — a real 429 would look
+    like a silent reconnect loop. Event name and payload keys are a
+    frontend contract.
     """
     payload = {
         "code": "rate_limited",
@@ -308,12 +253,11 @@ def sse_rate_limit_frame(decision: RateLimitDecision) -> str:
 
 
 def rate_limited_stream(decision: RateLimitDecision) -> StreamingResponse:
-    """A complete, well-formed 200 SSE response carrying only the refusal.
+    """A complete 200 SSE response carrying only the refusal.
 
-    Both streaming routes return this from the top of the handler, before any
-    retrieval or LLM call — the point of refusing chat is not spending the three
-    LLM calls it would otherwise make. `[DONE]` is included so the frontend's
-    normal stream teardown runs instead of its error path.
+    Returned before any retrieval or LLM call, so the refusal doesn't spend
+    what it exists to avoid spending. `[DONE]` keeps the frontend on its
+    normal teardown path.
     """
     async def _stream():
         yield sse_rate_limit_frame(decision)
@@ -331,12 +275,11 @@ def rate_limited_stream(decision: RateLimitDecision) -> StreamingResponse:
 
 
 def rate_limit(tier: str, *, by_ip_only: bool = False):
-    """Route dependency for a normal (non-streaming) route: refuses with a real
-    429 and a `Retry-After` header, which is what an HTTP client can act on.
+    """Route dependency for a non-streaming route: refuses with a real 429
+    and a `Retry-After` header.
 
-    Used as `dependencies=[Depends(rate_limit(TIER_X))]` on the decorator, since
-    the route body has no use for the verdict — either it ran or it never
-    started.
+    Used as `dependencies=[Depends(rate_limit(TIER_X))]` — the route body
+    never sees the verdict; it either ran or never started.
     """
     def _dependency(request: Request, db: Session = Depends(get_session)) -> RateLimitDecision:
         decision = check_rate_limit(db, identity=caller_identity(request, db, by_ip_only=by_ip_only), tier=tier)
@@ -353,9 +296,8 @@ def rate_limit(tier: str, *, by_ip_only: bool = False):
 
 def stream_rate_limit(tier: str):
     """Route dependency for an SSE route: returns the verdict instead of
-    raising, because a refusal here has to be a frame inside a 200 body rather
-    than a status code. The route checks `.refused` and returns
-    `rate_limited_stream(...)` — see routers/chat.py and routers/synthesis.py.
+    raising, since a refusal here must ride inside a 200 body. Callers check
+    `.refused` and return `rate_limited_stream(...)`.
     """
     def _dependency(request: Request, db: Session = Depends(get_session)) -> RateLimitDecision:
         return check_rate_limit(db, identity=caller_identity(request, db), tier=tier)

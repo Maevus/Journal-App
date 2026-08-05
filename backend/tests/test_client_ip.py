@@ -1,15 +1,9 @@
 """The trust boundary: who the app believes is calling.
 
-Every per-IP limit is exactly as strong as this one function, so these tests pin
-both halves of the rule. `X-Forwarded-For` is a request header — anything on the
-wire can write it — so honouring it from an untrusted peer means an attacker
-sends a fresh value per request, every request lands in its own bucket, and the
-limits are decorative. Refusing to honour it behind a real load balancer is the
-opposite failure: every visitor on earth shares the balancer's address.
-
-The chain tests are the ones that matter under a proxy: a client can put
-anything it likes at the *left* of the header, and only the hops the proxies
-themselves appended (at the right) are trustworthy.
+X-Forwarded-For is client-writable, so honouring it from an untrusted peer
+lets an attacker mint a fresh IP bucket per request; refusing it behind a
+real proxy collapses every visitor onto one address. Only hops the proxies
+themselves appended (the right side of the header) are trustworthy.
 """
 import pytest
 from starlette.requests import Request
@@ -63,18 +57,18 @@ def test_trusted_proxy_supplies_the_client(trust):
 
 
 def test_chain_takes_the_rightmost_untrusted_hop(trust):
-    """Each proxy *appends*, so the right-hand entries are the ones our own
-    infrastructure wrote. `9.9.9.9` is whatever the client sent — it must not
-    win, or the limit is spoofable from behind the proxy too."""
+    """Each proxy *appends*, so right-hand entries are ones our infrastructure
+    wrote. `9.9.9.9` is client-supplied — it must not win, or the limit is
+    spoofable from behind the proxy too."""
     trust("10.0.0.1,10.0.0.2")
     req = _request(peer="10.0.0.1", forwarded="9.9.9.9, 203.0.113.7, 10.0.0.2")
     assert client_ip(req) == "203.0.113.7"
 
 
 def test_all_hops_trusted_falls_back_to_the_first(trust):
-    """Every hop claims to be one of our proxies. Nothing here is a real client,
-    so take the leftmost — matching uvicorn's ProxyHeadersMiddleware, which the
-    Dockerfile runs off the same config value."""
+    """Every hop claims to be one of our proxies, so none is a real client —
+    take the leftmost, matching uvicorn's ProxyHeadersMiddleware off the same
+    config value."""
     trust("10.0.0.1,10.0.0.2")
     assert client_ip(_request(peer="10.0.0.1", forwarded="10.0.0.2, 10.0.0.1")) == "10.0.0.2"
 
@@ -93,9 +87,8 @@ def test_port_suffixes_are_stripped(trust):
 
 
 def test_wildcard_trusts_every_peer(trust):
-    """`*` is the value backend/Dockerfile used to ship and no longer does. It
-    is still accepted so the knob mirrors uvicorn's --forwarded-allow-ips, but
-    it means any peer can name itself — pinned here so the cost is visible."""
+    """`*` mirrors uvicorn's --forwarded-allow-ips and is still accepted, but
+    it means any peer can name itself — pinned here so that cost stays visible."""
     trust("*")
     assert client_ip(_request(peer="198.51.100.9", forwarded="1.2.3.4")) == "1.2.3.4"
 

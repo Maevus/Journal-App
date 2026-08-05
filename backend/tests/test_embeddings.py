@@ -1,9 +1,6 @@
-"""Unit tests for the pgvector embeddings wrapper — pure helpers + the
-off-Postgres degrade path (no real Postgres, no model download).
-
-Real vector behavior (embedding + ANN ranking + per-user isolation) is exercised
-against a live pgvector Postgres in test_embeddings_integration.py, gated on
-TEST_DATABASE_URL.
+"""Unit tests for the pgvector embeddings wrapper: pure helpers + the
+off-Postgres degrade path. Real vector behavior is exercised against a live
+Postgres in test_embeddings_integration.py (gated on TEST_DATABASE_URL).
 """
 import services.embeddings as emb
 

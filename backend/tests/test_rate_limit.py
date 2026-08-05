@@ -1,19 +1,17 @@
 """The limiter core: fixed-window counters in the database.
 
-These exercise `check_rate_limit` directly, with `now` injected, so the window
-arithmetic is pinned without sleeping. The counters live in SQL rather than a
-process dict because production is expected to run more than one uvicorn worker
-and per-process counters multiply every limit by the worker count; the race that
-matters is therefore Postgres-shaped and lives in
+These exercise `check_rate_limit` directly, with `now` injected, so window
+arithmetic is pinned without sleeping. Counters live in SQL rather than a
+process dict because production runs more than one uvicorn worker and
+per-process counters would multiply every limit by the worker count; the
+concurrency race itself is Postgres-shaped and lives in
 test_rate_limit_concurrency_pg.py.
 
-Note the deliberate asymmetry with the quota gate, pinned by
-`test_fails_open_when_the_counter_store_breaks`: quota fails CLOSED because the
-thing it protects is money not yet spent, and refusing costs nothing. The
-limiter fails OPEN because the thing it protects is our own process, and a
-limiter that refuses the whole app when its table is unreachable is a bigger
-outage than the abuse it was guarding against — especially since every route it
-guards needs that same database anyway.
+Deliberate asymmetry with the quota gate, pinned by
+`test_fails_open_when_the_counter_store_breaks`: quota fails CLOSED (it protects
+money not yet spent, so refusing costs nothing); the limiter fails OPEN (it
+protects our own process, and refusing the whole app on a table outage is worse
+than the abuse it guards against — every route it guards needs that DB anyway).
 """
 from datetime import datetime, timedelta
 
@@ -37,8 +35,8 @@ _T0 = datetime(2026, 8, 4, 10, 30, 12)
 
 @pytest.fixture
 def limits(monkeypatch):
-    """Set one tier's two windows for a test. The autouse `rate_limit_headroom`
-    fixture keeps every other tier out of the way."""
+    """Set one tier's two windows (autouse `rate_limit_headroom` keeps every
+    other tier out of the way)."""
     def _set(tier, *, per_min, per_hour=0):
         monkeypatch.setattr(config, f"RATE_LIMIT_{tier.upper()}_PER_MIN", per_min)
         monkeypatch.setattr(config, f"RATE_LIMIT_{tier.upper()}_PER_HOUR", per_hour)
@@ -56,16 +54,15 @@ def test_first_request_is_allowed(session, limits):
 
 
 def test_refuses_once_past_the_per_minute_limit(session, limits):
-    """The limit is a count of allowed requests, so the (limit+1)th is the
-    first refusal — off by one here is a whole extra LLM call per window."""
+    """The limit counts allowed requests, so the (limit+1)th is the first
+    refusal — off by one here is a whole extra LLM call per window."""
     limits(TIER_CHAT, per_min=3)
     assert [_attempt(session).refused for _ in range(5)] == [False, False, False, True, True]
 
 
 def test_counters_are_per_identity(session, limits):
-    """The entire point under PUBLIC_DEMO: two anonymous visitors resolve to the
-    same demo User, so if the bucket were shared one abuser would starve the
-    other. Different identities must not see each other's count."""
+    """The point under PUBLIC_DEMO: two anonymous visitors resolve to the same
+    demo User, so a shared bucket would let one abuser starve the other."""
     limits(TIER_CHAT, per_min=1)
     assert _attempt(session, identity="ip:1.1.1.1").refused is False
     assert _attempt(session, identity="ip:1.1.1.1").refused is True
@@ -73,8 +70,8 @@ def test_counters_are_per_identity(session, limits):
 
 
 def test_counters_are_per_tier(session, limits):
-    """Chat costs three LLM calls and search costs a local encode — they get
-    separate budgets, so exhausting one must not close the other."""
+    """Chat costs three LLM calls, search costs a local encode — separate
+    budgets, so exhausting one must not close the other."""
     limits(TIER_CHAT, per_min=1)
     limits(TIER_SEARCH, per_min=1)
     assert _attempt(session, tier=TIER_CHAT).refused is False
@@ -91,9 +88,9 @@ def test_the_window_rolls_over(session, limits):
 
 
 def test_windows_are_aligned_not_relative_to_first_use(session, limits):
-    """Fixed windows, floored to the clock: two callers who start at different
-    moments inside the same minute share a boundary. That is what makes the
-    counter a single row per (bucket, window) and the increment atomic."""
+    """Fixed windows, floored to the clock: two callers starting at different
+    moments in the same minute share a boundary — what makes the counter a
+    single row per (bucket, window) with an atomic increment."""
     limits(TIER_CHAT, per_min=1)
     _attempt(session, now=datetime(2026, 8, 4, 10, 30, 5))
     assert _attempt(session, now=datetime(2026, 8, 4, 10, 30, 59)).refused is True
@@ -101,9 +98,9 @@ def test_windows_are_aligned_not_relative_to_first_use(session, limits):
 
 
 def test_the_hourly_window_catches_a_paced_abuser(session, limits):
-    """Why there are two windows at all. A caller who stays under the per-minute
-    limit and simply waits out each boundary would otherwise sustain
-    limit×60 requests an hour forever; the hour window is the ceiling on that."""
+    """Why there are two windows: a caller who stays under the per-minute limit
+    and waits out each boundary could otherwise sustain limit×60 requests an
+    hour forever; the hour window ceilings that."""
     limits(TIER_CHAT, per_min=2, per_hour=5)
     allowed = 0
     for minute in range(10):  # well-behaved per minute, greedy per hour
@@ -114,10 +111,10 @@ def test_the_hourly_window_catches_a_paced_abuser(session, limits):
 
 
 def test_a_refused_request_does_not_consume_the_hourly_budget(session, limits):
-    """Windows are checked shortest first and the check returns on the first
-    refusal, so a client stopped by the minute limit has not also spent an hour
-    slot. Otherwise a client that retries in a tight loop — the exact thing a
-    429 invites — would burn its own hourly budget while being told to wait."""
+    """Windows are checked shortest first and return on the first refusal, so a
+    client stopped by the minute limit hasn't also spent an hour slot —
+    otherwise a tight retry loop (the exact thing a 429 invites) would burn its
+    own hourly budget while being told to wait."""
     limits(TIER_CHAT, per_min=1, per_hour=5)
     for _ in range(20):
         _attempt(session, now=_T0)  # 1 allowed, 19 refused, all in one minute
@@ -130,9 +127,8 @@ def test_a_refused_request_does_not_consume_the_hourly_budget(session, limits):
 
 
 def test_zero_disables_a_window(session, limits):
-    """0 is the per-tier escape hatch — the shipped default for the two tiers
-    that have no hourly ceiling, and the knob an operator turns when a limit
-    misfires in production."""
+    """0 is the per-tier escape hatch — shipped default for tiers with no hourly
+    ceiling, and the knob an operator turns when a limit misfires in production."""
     limits(TIER_CHAT, per_min=0, per_hour=0)
     assert all(not _attempt(session).refused for _ in range(50))
     with Session(session.get_bind()) as s:
@@ -140,7 +136,7 @@ def test_zero_disables_a_window(session, limits):
 
 
 def test_retry_after_is_the_time_left_in_the_window(session, limits):
-    """The client is told when to come back, not a constant. 12s into a minute
+    """Retry-After is when to come back, not a constant: 12s into a minute
     window leaves 48."""
     limits(TIER_CHAT, per_min=1)
     _attempt(session, now=_T0)
@@ -150,8 +146,8 @@ def test_retry_after_is_the_time_left_in_the_window(session, limits):
 
 
 def test_retry_after_is_never_zero(session, limits):
-    """A `Retry-After: 0` reads as "retry immediately", which is a spin loop.
-    The last instant of a window still has to round up to a second."""
+    """`Retry-After: 0` reads as "retry immediately" — a spin loop. The last
+    instant of a window still has to round up to a second."""
     limits(TIER_CHAT, per_min=1)
     end_of_window = datetime(2026, 8, 4, 10, 30, 59, 999_000)
     _attempt(session, now=end_of_window)
@@ -167,11 +163,9 @@ def test_the_refusal_message_is_human_readable(session, limits):
 
 
 def test_sse_frame_is_the_agreed_wire_format(session, limits):
-    """A contract with the frontend, not an implementation detail: the named
-    event and the three payload keys are what the SPA parses. Same shape as
-    quota's `event: quota` frame, and for the same reason — EventSource cannot
-    read a non-200 body, so a 429 would surface as a reconnect loop showing a
-    generic network error."""
+    """A contract with the frontend: the named event and three payload keys are
+    what the SPA parses. Same shape as quota's `event: quota` frame, for the
+    same reason — EventSource can't read a non-200 body."""
     import json
 
     limits(TIER_CHAT, per_min=1)
@@ -189,8 +183,8 @@ def test_sse_frame_is_the_agreed_wire_format(session, limits):
 
 
 def test_expired_rows_are_swept(session, limits):
-    """Every distinct caller mints rows forever otherwise. A counter is dead the
-    moment its window closes, so the sweep is a plain indexed range delete."""
+    """Without a sweep, every distinct caller mints rows forever. A counter is
+    dead the moment its window closes, so the sweep is a plain indexed range delete."""
     limits(TIER_CHAT, per_min=5, per_hour=50)
     _attempt(session, now=_T0)
 
@@ -211,10 +205,10 @@ def test_the_sweep_spares_a_live_window(session, limits):
 
 
 def test_fails_open_when_the_counter_store_breaks(session, limits, caplog):
-    """The asymmetry with services/quota.py, stated as a test. The gate refuses
-    when it cannot verify because the money is still unspent. The limiter admits,
-    because refusing every request in the app is a worse outcome than admitting
-    them — and it is loud about it so the failure is not silent."""
+    """The asymmetry with services/quota.py: the gate refuses when it can't
+    verify (money still unspent); the limiter admits, since refusing every
+    request in the app is worse than admitting them — but logs loudly so the
+    failure isn't silent."""
     limits(TIER_CHAT, per_min=1)
     broken = Session(create_engine("sqlite:////nonexistent/nowhere.db"))
 

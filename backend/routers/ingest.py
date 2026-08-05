@@ -23,9 +23,9 @@ class IngestRequest(BaseModel):
     source: str = "text"
 
 
-# The most expensive non-LLM route in the app: a GoodNotes post OCRs every page
-# of the PDF inline, and every accepted entry queues a background mood-scoring
-# LLM call that the quota gate sees only once it runs.
+# Priciest non-LLM route: GoodNotes OCRs every PDF page inline, and each
+# accepted entry queues a background mood-scoring call the quota gate only
+# sees once it runs.
 @router.post("", dependencies=[Depends(rate_limit(TIER_INGEST))])
 async def ingest(
     background_tasks: BackgroundTasks,
@@ -43,9 +43,8 @@ async def ingest(
     session: Session = Depends(get_session),
     user: User = Depends(require_writable_user),
 ):
-    # The demo is a read-only showcase: a signed-out visitor must not write to the
-    # shared demo journal (chat + search stay open, bounded by the demo budget).
-    # require_writable_user enforces that for every mutating route.
+    # Demo is read-only: a signed-out visitor can't write to the shared demo
+    # journal (chat/search stay open). require_writable_user enforces this.
     if source == "keep":
         stats, new_entries = await ingest_keep(session)
     elif source == "goodnotes":
@@ -65,10 +64,9 @@ async def ingest(
                 status_code=422,
                 detail="Request body required when source is not 'keep', 'goodnotes', or 'all'.",
             )
-        # Direct text posts belong to whoever posted them. The keep/goodnotes
-        # branches above resolve their own owner (the env-configured GOOGLE_EMAIL
-        # account) — the connectors are single-account legacy, and the user
-        # *triggering* a sync isn't necessarily the account being synced.
+        # Direct posts belong to whoever posted them. keep/goodnotes instead
+        # resolve the env-configured GOOGLE_EMAIL owner — legacy single-account
+        # connectors, since the triggering user isn't necessarily the synced one.
         stats, new_entries = ingest_entries(
             request.entries, request.source, session, user_id=user.id
         )

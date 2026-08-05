@@ -1,10 +1,9 @@
 """POST /stream/synthesis — SSE streaming and the in-memory response cache.
 
 POST, not GET: a GET was reachable by cross-site navigation with the
-SameSite=Lax session cookie attached, so any page could spend a logged-in
-user's budget. See the route docstring.
+SameSite=Lax cookie attached, letting any page spend a logged-in user's budget.
 
-`stream_text` (the LLM call) is stubbed; the cache is reset per test.
+`stream_text` is stubbed; the cache is reset per test.
 """
 from collections import OrderedDict
 from datetime import datetime
@@ -30,18 +29,16 @@ async def _refusing_stream(*args, **kwargs):
 
 def test_get_is_not_allowed(client):
     """The CSRF fix, pinned: a cross-site page can navigate the browser into a
-    GET with the SameSite=Lax session cookie attached, so the paid route must
-    not answer one. POST with a JSON body forces a CORS preflight the
-    FRONTEND_URL allow-list refuses."""
+    GET with the SameSite=Lax cookie attached, so the paid route must refuse
+    GET. POST forces a CORS preflight the FRONTEND_URL allow-list refuses."""
     assert client.get("/stream/synthesis", params={"days": 0, "limit": 5}).status_code == 405
 
 
 def test_over_budget_streams_quota_frame_and_caches_nothing(client, add_entry, monkeypatch):
-    """An over-budget user gets a named `event: quota` SSE frame (the refusal
-    rides inside the 200 stream — the status is already sent by the time the
-    gate refuses) and a clean [DONE]. The refusal must not poison the cache:
-    once there's budget again, the same request must reach the LLM, not replay
-    a phantom cache entry."""
+    """An over-budget user gets a named `event: quota` SSE frame (rides inside
+    the 200 stream — status is already sent by the time the gate refuses) and a
+    clean [DONE]. The refusal must not poison the cache: once budget's back,
+    the same request must reach the LLM, not replay a phantom entry."""
     monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
     add_entry("a reflective entry", timestamp=datetime(2026, 5, 10))
     monkeypatch.setattr(synthesis, "stream_text", _refusing_stream)

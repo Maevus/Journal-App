@@ -1,10 +1,8 @@
 """Store and retrieve users' own API keys, encrypted at rest (ADR 0003, F4).
 
-A deep module: the interface deals in plaintext keys (`store_user_key` takes
-one, `get_user_key` returns one); Fernet encryption is entirely internal, so no
-caller ever handles ciphertext or a cipher object. The plaintext is never
-logged and never leaves this boundary except back to the LLM client at call
-time.
+A deep module: callers pass/receive plaintext keys; Fernet encryption is
+entirely internal, so no caller ever handles ciphertext. The plaintext is
+never logged and never leaves this boundary except back to the LLM client.
 """
 from typing import Optional
 
@@ -18,9 +16,9 @@ from models.keys import UserApiKey
 def _fernet() -> Fernet:
     """Build the cipher from the operator's APP_ENCRYPTION_KEY.
 
-    Raised lazily, not at import: the app runs fine for free-tier users with no
-    key configured — only storing or reading a BYO key requires it, and this is
-    where a missing key surfaces as a clear error instead of a cryptic crash.
+    Raised lazily, not at import — free-tier users with no key configured are
+    unaffected; only storing/reading a BYO key needs this, so a missing key
+    surfaces here as a clear error, not a crash elsewhere.
     """
     if not config.APP_ENCRYPTION_KEY:
         raise RuntimeError(
@@ -48,8 +46,7 @@ def store_user_key(db: Session, *, user_id: int, raw_key: str, provider: str = "
 
 def has_user_key(db: Session, *, user_id: int, provider: str = "anthropic") -> bool:
     """Whether `user_id` has a stored key — a row-existence check that does NOT
-    decrypt, so callers (the quota gate) can ask "is this a BYO user?" without
-    APP_ENCRYPTION_KEY set or the cost of decryption."""
+    decrypt, so callers (the quota gate) can ask this without APP_ENCRYPTION_KEY set."""
     row = db.exec(
         select(UserApiKey.id)
         .where(UserApiKey.user_id == user_id)

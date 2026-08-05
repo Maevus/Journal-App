@@ -1,8 +1,7 @@
 """get_or_create_user — the upsert the OAuth callback runs on every login.
 
-Contract: one Google identity (`sub`) maps to exactly one account, forever. A
-repeat login must never mint a second row; email, being a mutable display
-attribute, is refreshed to whatever Google currently reports.
+Contract: one Google `sub` maps to exactly one account, forever. Repeat login
+never mints a second row; email (mutable) is refreshed to Google's latest.
 """
 from sqlmodel import select
 

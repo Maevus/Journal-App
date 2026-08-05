@@ -1,16 +1,12 @@
-"""Additive reconcile: copy entries SQLite has and Postgres doesn't.
+"""Additive reconcile: copy entries SQLite has and Postgres doesn't, for when
+both databases were written to and each holds rows the other lacks (unlike
+migrate_sqlite_to_pg.py, the clean one-shot copy that refuses a non-empty
+target).
 
-`migrate_sqlite_to_pg.py` is the clean one-shot copy and refuses a non-empty
-target. This is for the messier case that actually happened — both databases
-were written to for a while, so each holds entries the other lacks and neither
-may be dropped.
-
-Matches on (user, content_hash), the same key as the app's dedup constraint, and
-inserts only what is missing. Rows get fresh Postgres ids; embeddings are keyed
-by id, so run scripts/embed_backfill.py afterwards. Nothing is updated or
-deleted, so re-running is a no-op.
-
-Users are matched by EMAIL — ids are not comparable across the two databases.
+Matches on (user, content_hash) — the app's dedup key — and inserts only
+what's missing. Users match by EMAIL (ids aren't comparable across the two
+DBs). Rows get fresh Postgres ids, so run scripts/embed_backfill.py after.
+Nothing is updated or deleted, so re-running is a no-op.
 
 Usage (from backend/):
 

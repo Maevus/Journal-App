@@ -4,12 +4,10 @@ Revision ID: 5c9a2718cac9
 Revises: 574e9ccc3743
 Create Date: 2026-08-04 10:57:25.700122
 
-Headroom claimed by in-flight LLM calls, so the quota gate can see calls that
-have started but not yet been metered (LLMUsage only exists once a call
-finishes, so concurrent checkers all read the same stale meter and all pass).
-Indexed on the two columns the gate's sums filter by: `user_id` for a user's
-budget, `created_at` for the day window and the TTL that retires a reservation
-whose call died before settling.
+Headroom claimed by in-flight LLM calls, so the quota gate can see calls
+that started but aren't metered yet (else concurrent checkers all read the
+same stale meter and pass). Indexed on `user_id` (budget) and `created_at`
+(day window + TTL).
 """
 from typing import Sequence, Union
 

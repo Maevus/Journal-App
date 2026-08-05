@@ -1,8 +1,8 @@
 """Session-based auth: the httpOnly-cookie mechanism (ADR 0003).
 
-Security-critical — this is the gate every protected endpoint will sit behind,
-so the tests actively probe the boundaries: only-the-hash-is-stored, unknown
-tokens, expired sessions, and the 401 path.
+Security-critical — the gate every protected endpoint sits behind, so tests
+probe the boundaries: only-the-hash-is-stored, unknown tokens, expired
+sessions, the 401 path.
 """
 from datetime import timedelta
 

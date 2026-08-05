@@ -1,15 +1,12 @@
 """Session-based authentication — the httpOnly-cookie login (ADR 0003).
 
-After Google login we mint a random session token, hand the *raw* token to the
-browser in an httpOnly cookie, and store only its **hash** server-side. So a
-stray read of the `sessions` table can't reveal a live session (same reasoning
-as password hashing) — but SHA-256 (a fast hash) is the right tool here: the
-token is 256 bits of randomness from `secrets`, not a guessable secret, so there
-is no brute-force surface and no need for a slow KDF like bcrypt.
+The browser holds the raw session token (httpOnly cookie); only its SHA-256
+hash is stored server-side, so a DB read can't reveal a live session. SHA-256
+(not bcrypt) is fine here — the token is 256 bits of `secrets` randomness, not
+a guessable secret, so there's no brute-force surface to slow down.
 
-`get_current_user` resolves the cookie to a `User` and is the auth gate (401 if
-the cookie is absent, unknown, or expired). It will become the entry point of
-the isolation layer — every protected endpoint depends on it.
+`get_current_user` resolves the cookie to a `User` — the auth gate (401 if the
+cookie is absent, unknown, or expired).
 """
 import hashlib
 import secrets
@@ -28,16 +25,14 @@ SESSION_COOKIE = "session"
 SESSION_TTL = timedelta(days=14)
 
 # The demo deployment's always-logged-in account (decisions.md 2026-07-02).
-# Demo mode never 401s: get_current_user resolves to this user instead, so the
-# showcase stays zero-friction while running the identical isolation code path
-# (everything still scoped to a real user_id — no auth bypass to fork the code).
+# get_current_user resolves to this instead of 401ing — same isolation code
+# path as a real user, no auth-bypass fork.
 DEMO_GOOGLE_SUB = "demo"
 DEMO_EMAIL = "demo@journal.local"
 
-# The demo user's id, cached once resolved. Demo-ness is now a per-user fact (one
-# app instance serves the demo visitor AND real logged-in users), so quota/model
-# decisions ask "is this the demo user?" rather than a global flag. Only a
-# non-None result is cached, so it starts working the moment the demo is seeded.
+# The demo user's id, cached once resolved (only a non-None result is cached,
+# so this starts working as soon as the demo is seeded). Demo-ness is per-user —
+# quota/model decisions ask "is this the demo user?" rather than a global flag.
 _demo_user_id: Optional[int] = None
 
 
@@ -63,12 +58,10 @@ def is_demo_user_id(db: Session, user_id: Optional[int]) -> bool:
 def get_or_create_user(db: Session, *, google_sub: str, email: str) -> User:
     """Resolve a Google login to our account, creating it on first sight.
 
-    The OAuth callback runs this on every login. `google_sub` (Google's stable
-    identity) is the anchor: one sub → one account, forever, so a repeat login
-    never mints a duplicate. `email` is a mutable display attribute, so it's
-    refreshed to Google's current value. Both params are keyword-only — they're
-    both strings and trivial to transpose positionally, which would mis-key an
-    account; naming them at the call site removes that whole class of bug.
+    `google_sub` (Google's stable id) is the anchor — one sub → one account,
+    never a duplicate. `email` is refreshed to Google's current value. Both
+    args are keyword-only so two adjacent strings can't be transposed and
+    mis-key an account.
     """
     user = db.exec(select(User).where(User.google_sub == google_sub)).first()
     if user is None:
@@ -108,9 +101,8 @@ def create_session(db: Session, user: User, ttl: timedelta = SESSION_TTL) -> str
 def revoke_session(db: Session, raw_token: Optional[str]) -> None:
     """Server-side logout: delete the presented session row. Idempotent.
 
-    Clearing the browser cookie alone would leave the token live in the DB —
-    anyone holding a copy could keep using it until expiry. Deleting the row
-    makes logout mean logout.
+    Clearing the cookie alone would leave the token live in the DB; deleting
+    the row makes logout mean logout.
     """
     if not raw_token:
         return
@@ -140,11 +132,9 @@ def get_current_user(
 ) -> User:
     """FastAPI dependency: the current `User`, or 401. The auth gate.
 
-    Resolution order: a valid session → that real user (so a logged-in visitor is
-    always themselves). Otherwise the seeded demo user when demo access is enabled
-    — `IS_DEMO` (whole-app demo: everyone is the demo user) or `PUBLIC_DEMO` (the
-    signed-out state of the one app: a visitor without an account sees the demo,
-    read-only). Otherwise 401 (a private instance, logged out).
+    Order: a valid session wins. Else the seeded demo user if `IS_DEMO`
+    (everyone is demo) or `PUBLIC_DEMO` (signed-out visitors see the read-only
+    demo). Else 401.
     """
     user = resolve_session(db, session_token)
     if user is not None:
@@ -161,10 +151,9 @@ def require_writable_user(user: User = Depends(get_current_user)) -> User:
     """`get_current_user`, but 403 for the shared demo account.
 
     The demo journal is one account shared by every signed-out visitor, so a
-    write from any of them would be visible to all the others — and could spend
-    on or clear the account's settings. Every mutating route depends on this
-    instead of `get_current_user`, so the read-only invariant holds by
-    construction rather than by remembering an `if` on each new write route.
+    write from any of them is visible to all the others. Every mutating route
+    depends on this instead of `get_current_user`, so the read-only invariant
+    holds structurally rather than per-route.
     """
     if is_demo_user(user):
         raise HTTPException(

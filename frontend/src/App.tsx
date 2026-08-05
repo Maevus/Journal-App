@@ -14,9 +14,8 @@ import { TIME_RANGES, TimeRangeSelector } from './components/TimeRangeSelector'
 import { useAuth } from './hooks/useAuth'
 
 function App() {
-  // App owns the single useAuth instance: the gate below and the header
-  // widget must agree on one login state, and mid-session expiry (any 401 →
-  // AUTH_EXPIRED_EVENT → user null) has to flip the whole tree at once.
+  // Single useAuth instance: the gate and header widget share one login
+  // state, so a mid-session 401 (AUTH_EXPIRED_EVENT) flips the whole tree.
   const { user, loading, signOut } = useAuth()
   // One time period + source filter drives the mood chart, day drill-down,
   // and the synthesis panel.
@@ -108,9 +107,8 @@ function App() {
           </div>
         </section>
 
-        {/* Account: spend (F5) and the key that sets your tier (F4), tabbed
-            into one card. Saving/removing a key refetches usage via
-            KEY_CHANGED_EVENT. */}
+        {/* Account: spend and BYO key, tabbed into one card. Saving/removing
+            the key refetches usage via KEY_CHANGED_EVENT. */}
         <AccountPanel demo={user.demo} />
       </main>
     </div>

@@ -1,9 +1,7 @@
 """BYO API key entry (ADR 0003, freemium F4).
 
-A logged-in user stores their own provider key here. The key is validated
-against Anthropic on save (a real auth check, not just a format guess) and then
-stored encrypted by services/key_store.py. It is never echoed back in any
-response.
+Validated against Anthropic on save (a real auth check), then stored
+encrypted by services/key_store.py. Never echoed back in any response.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -36,10 +34,8 @@ def key_status(
     return {"provider": _PROVIDER, "has_key": key_store.has_user_key(db, user_id=user.id)}
 
 
-# Rate limited even though it stores rather than spends: every attempt makes a
-# live outbound call to Anthropic with no quota gate anywhere in front of it, and
-# an unlimited "does this key work?" endpoint is a key-testing oracle for anyone
-# holding a list of stolen keys.
+# Rate limited though it doesn't spend quota: each attempt is a live call to
+# Anthropic, so unbounded it's a key-testing oracle for stolen keys.
 @router.post("", dependencies=[Depends(rate_limit(TIER_KEYS))])
 async def set_key(
     body: KeyIn,
@@ -48,9 +44,8 @@ async def set_key(
 ):
     """Validate a BYO key against Anthropic, then store it encrypted.
 
-    The demo account is shared across every signed-out visitor — one must not set
-    a key on it, or everyone's calls would run on that key. `require_writable_user`
-    enforces that.
+    `require_writable_user` blocks setting a key on the shared demo account —
+    one key would end up serving every visitor.
     """
     if not config.APP_ENCRYPTION_KEY:
         raise HTTPException(
@@ -60,8 +55,7 @@ async def set_key(
     raw = body.api_key.strip()
     if not raw:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "API key must not be empty")
-    # Validate before storing: a live auth check catches typos and revoked keys
-    # now, rather than as a silent failure on the user's first synthesis.
+    # Validate before storing, so typos/revoked keys fail now, not on first synthesis.
     if not await key_is_valid(raw):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Anthropic rejected that API key")
     key_store.store_user_key(db, user_id=user.id, raw_key=raw)

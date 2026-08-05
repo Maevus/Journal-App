@@ -23,15 +23,11 @@ from services.llm_client import structured_output
 
 logger = logging.getLogger(__name__)
 
-# When a date window is active, pull a wider semantic pool: the global top-`limit`
-# semantic hits may all fall outside the window, which would leave in-window
-# entries with no semantic score and rank them on BM25 alone. Out-of-pool ids are
-# dropped anyway by the fusion, so this is harmless when the window is large.
-# TODO: this fixed cap still under-covers windows holding >100 entries (in-window
-# entries beyond the global semantic top-100 fall back to BM25-only). The deep fix
-# is now cheap on pgvector: add `timestamp` to `entry_embeddings` and push the
-# window into the ANN query's WHERE (a plain SQL predicate — no Chroma metadata
-# dance), so search_similar itself returns only in-window hits.
+# When a date window is active, pull a wider semantic pool so in-window entries
+# aren't left BM25-only just because they miss the global top-`limit` hits.
+# TODO: still under-covers windows >100 entries. Fix: add `timestamp` to
+# entry_embeddings and push the window into the ANN query's WHERE, so
+# search_similar itself returns only in-window hits.
 _WINDOWED_SEMANTIC_POOL = 100
 
 # Strips punctuation ("grumpy." and "grumpy" must be one token). `\w` is
@@ -45,9 +41,8 @@ def _tokenize(text: str) -> list[str]:
     through this or they stop matching."""
     return _TOKEN_RE.findall(text.lower())
 
-# A small, fast model is plenty for date extraction + follow-up condensation.
-# These are task-fixed models passed explicitly, so they bypass the per-user
-# resolution step (llm_client.resolve_model) — the same string regardless of tier.
+# Task-fixed, passed explicitly — bypasses per-user resolution
+# (llm_client.resolve_model), since a small fast model suffices regardless of tier.
 _DATE_PARSE_MODEL = "claude-haiku-4-5"
 _CONDENSE_MODEL = "claude-haiku-4-5"
 
@@ -64,16 +59,13 @@ def hybrid_search(
     """Return [(entry, score)] of `user_id`'s entries ranked by
     0.7·semantic + 0.3·BM25, top `limit`.
 
-    `user_id` is required and keyword-only: retrieval over a journal must always
-    say whose, so a forgotten argument fails loudly instead of searching everyone,
-    and a transposed one can't bind to the adjacent int `limit` (ADR 0003). The
-    SQL candidate set is the isolation boundary — semantic hits on other users'
-    rows are dropped at fusion. The pgvector query is user-filtered too (WHERE
-    user_id), but as defense in depth: correctness never rests on the vector store.
+    `user_id` is required and keyword-only (ADR 0003): a forgotten argument
+    fails loudly instead of searching everyone. The SQL candidate set is the
+    isolation boundary — other users' semantic hits are dropped at fusion;
+    the pgvector filter is defense in depth, not the source of truth.
 
-    `start`/`end` (naive UTC, half-open `[start, end)`) restrict the candidate
-    set to that window before fusion, so a time-scoped question can't be crowded
-    out by more-similar entries from other dates. Either bound may be omitted.
+    `start`/`end` (naive UTC, half-open) restrict the candidate set before
+    fusion, so a time-scoped question isn't crowded out by other dates.
     """
     stmt = user_entries(user_id)
     if start is not None:
@@ -85,9 +77,8 @@ def hybrid_search(
         return []
 
     # --- Semantic search (pgvector) ---
-    # The ANN query is already user-filtered (WHERE user_id); the fusion below
-    # additionally keeps only ids in `entries`, so out-of-window semantic hits
-    # are discarded and SQL stays the isolation boundary of record.
+    # Already user-filtered; the fusion below also keeps only ids in
+    # `entries`, discarding out-of-window hits.
     windowed = start is not None or end is not None
     n_semantic = max(limit, _WINDOWED_SEMANTIC_POOL) if windowed else limit
     semantic_scores: dict[int, float] = dict(
@@ -99,9 +90,8 @@ def hybrid_search(
     bm25 = BM25Okapi(tokenised_corpus)
     bm25_raw = bm25.get_scores(_tokenize(query))
     bm25_max = max(bm25_raw) if len(bm25_raw) else 0.0
-    # BM25 IDF goes negative for terms in >half the docs, so raw scores can be
-    # negative. Clamp: a non-positive max or a negative score contributes 0, which
-    # avoids a negative/sign-flipped boost inflating an irrelevant entry's rank.
+    # BM25 IDF goes negative for terms in >half the docs. Clamp to 0 so a
+    # negative score can't sign-flip into a boost for an irrelevant entry.
     bm25_scores: dict[int, float] = {
         entries[i].id: (score / bm25_max if bm25_max > 0 and score > 0 else 0.0)
         for i, score in enumerate(bm25_raw)
@@ -143,10 +133,9 @@ async def parse_date_range(
 ) -> tuple[Optional[datetime], Optional[datetime]]:
     """Resolve a question's time scope to a half-open `[start, end)` window.
 
-    Returns (None, None) when the question isn't time-scoped or parsing fails —
-    callers then retrieve over the whole journal, exactly as before. The LLM end
-    bound is inclusive; this converts it to an exclusive next-day boundary so a
-    whole-day/month range is retrieved completely.
+    Returns (None, None) when unscoped or parsing fails, so callers retrieve
+    the whole journal. The LLM's end bound is inclusive; converted here to
+    an exclusive next-day boundary.
     """
     today = today or utcnow_naive().date()
     prompt = f"Current date: {today.isoformat()}\n\nQuestion: {question}"
@@ -200,11 +189,9 @@ _CONDENSE_SYSTEM = (
 async def condense_query(history: list[dict], question: str, *, user_id: Optional[int]) -> str:
     """Rewrite a follow-up `question` into a standalone retrieval query.
 
-    `history` is the prior conversation as a list of `{role, content}` messages
-    (oldest first), excluding the current question. On the first turn (no
-    history) the question already stands alone, so this returns it verbatim with
-    no LLM call. Any failure degrades to the raw question — retrieval then runs
-    on the literal text, exactly as a single-turn ask would.
+    `history` is prior `{role, content}` messages, oldest first, excluding
+    the current question. No history means no LLM call — the question
+    already stands alone. Any failure degrades to the raw question.
     """
     if not history:
         return question
@@ -232,11 +219,9 @@ async def condense_query(history: list[dict], question: str, *, user_id: Optiona
 class MoodSummary:
     """Whole-journal mood aggregates for the Ask agent's context.
 
-    RAG retrieves only a handful of entries per turn, so the bot can't answer
-    "what's my average mood?" or "how has it trended over the years?" from the
-    entries alone. This summary gives it the aggregate the mood chart is built
-    from — scoped to one user, computed the same parameterized-ORM way /trends
-    aggregates (the question never touches SQL, so no injection surface)."""
+    RAG retrieves only a handful of entries per turn, so questions like
+    "what's my average mood?" need this aggregate instead — scoped to one
+    user, computed the same parameterized-ORM way /trends does."""
 
     count: int
     overall_avg: float
@@ -253,12 +238,10 @@ def mood_summary(
     end: Optional[datetime] = None,
 ) -> Optional[MoodSummary]:
     """`user_id`'s mood aggregates over their scored entries, or None if none
-    are scored in scope (the caller then omits the block entirely).
+    are scored in scope.
 
-    `start`/`end` (naive UTC, half-open `[start, end)`) scope the aggregate to a
-    time window — the same window chat parses for retrieval — so a time-scoped
-    mood question ("average in 2024?") summarises that period, not all time.
-    Omit both for the whole journal."""
+    `start`/`end` (naive UTC, half-open) scope the aggregate to a time
+    window, so "average in 2024?" summarises that period, not all time."""
     stmt = user_entries(user_id).where(JournalEntry.mood_score.isnot(None))  # type: ignore[union-attr]
     if start is not None:
         stmt = stmt.where(JournalEntry.timestamp >= start)

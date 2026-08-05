@@ -4,21 +4,16 @@ Revision ID: 692005f9feb1
 Revises: 574e9ccc3743
 Create Date: 2026-08-04 13:49:23.104884
 
-The fixed-window counters behind services/rate_limit.py. In the database rather
-than in process memory because production is expected to run more than one
-uvicorn worker, and per-process counters multiply every limit by the worker
-count with no symptom until someone leans on it.
+Fixed-window counters behind services/rate_limit.py. In the database, not
+process memory, since per-process counters would multiply every limit by
+the worker count.
 
-The composite primary key is load-bearing, not decoration: `(bucket,
-window_start)` is what `INSERT … ON CONFLICT … DO UPDATE … RETURNING hits`
-targets, and that one statement is the entire concurrency story here. Replacing
-it with a surrogate id plus a unique constraint would still work; dropping the
-uniqueness would silently turn every increment into an insert and every limit
-into no limit at all.
+Composite primary key `(bucket, window_start)` is load-bearing — it's what
+`INSERT … ON CONFLICT … DO UPDATE … RETURNING hits` targets; dropping the
+uniqueness turns every limit into no limit.
 
-Portable DDL, no dialect guard — unlike the pgvector revision, this table has to
-exist on SQLite too (the test suite and the standalone demo both run the
-limiter for real).
+Portable DDL, no dialect guard — this table must exist on SQLite too
+(tests, standalone demo).
 """
 from typing import Sequence, Union
 

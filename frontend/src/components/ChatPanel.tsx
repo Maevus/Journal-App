@@ -55,10 +55,8 @@ export function ChatPanel() {
   const [selected, setSelected] = useState<{ date: string; source: string } | null>(null)
   const { text, sources, error, quota, rateLimited, isStreaming, start, abort } = useChatStream()
   const scrollRef = useRef<HTMLDivElement>(null)
-  // Both refusal frames are notices, not failures: the backend declined before
-  // spending (over budget) or because we're asking too fast. Only one can arrive
-  // per turn, so they share one banner — and it shows the *server's* wording,
-  // which knows the actual budget/window.
+  // Refusal, not failure: backend declined before spending (quota) or the
+  // caller's too fast (rate limit). Only one per turn; shows the server's own wording (it knows the budget/window).
   const refusal = quota ?? rateLimited
 
   // Keep the latest answer pinned to the bottom while tokens stream in.
@@ -71,12 +69,9 @@ export function ChatPanel() {
   const handleAsk = () => {
     const q = question.trim()
     if (!q || isStreaming) return
-    // The current turn renders live from the hook. When a new question is asked,
-    // freeze the just-finished turn into history first (in this event handler —
-    // not an effect), then start the next stream. Only carry it forward if it
-    // actually produced an answer — a turn that was aborted/errored before any
-    // token must not become an empty assistant message (the API rejects empty
-    // non-final content) or a blank bubble.
+    // Freeze the prior turn into history here (not an effect) before starting
+    // the next stream. Skip turns with no answer (aborted/errored) — the API
+    // rejects empty assistant messages.
     const carryPrior = pending !== null && text.trim() !== ''
     const priorPair: ChatMessage[] = carryPrior
       ? [

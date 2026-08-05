@@ -1,13 +1,8 @@
 import { useEffect, useState } from 'react'
 import { deleteApiKey, fetchKeyStatus, saveApiKey } from '../api/client'
 
-/** Bring-your-own-key control (F4). Free-tier users run Haiku; adding an
- *  Anthropic key here (validated against Anthropic on save, then stored
- *  encrypted server-side) upgrades their analysis to Opus on their own key.
- *  The key is entered into a password field and never rendered back — the
- *  status endpoint returns only a boolean. In demo mode (`demo`) the whole
- *  control is replaced by a note: every visitor shares the demo account, so
- *  POST /keys would 403 anyway — better to say so than to offer a form. */
+/** Bring-your-own-key control. A validated key (stored encrypted, never
+ *  rendered back) upgrades the free Haiku tier to Opus. Demo mode shows a note instead, since POST /keys 403s there. */
 export function ApiKeyPanel({ demo = false }: { demo?: boolean }) {
   const [hasKey, setHasKey] = useState<boolean | null>(null) // null = still loading
   const [apiKey, setApiKey] = useState('')

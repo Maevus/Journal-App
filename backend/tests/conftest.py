@@ -30,10 +30,8 @@ TEST_DB_SUFFIX = "_test"
 def require_test_database_url() -> str:
     """`TEST_DATABASE_URL`, refusing anything that isn't obviously a scratch DB.
 
-    The Postgres-backed tests run `alembic downgrade base`, which drops every
-    table on the target. Harmless on a throwaway database, destroys a real
-    journal — and the two are one environment variable apart. Opt in explicitly
-    by giving the database a `_test` suffix.
+    The Postgres tests run `alembic downgrade base`, dropping every table on the
+    target — harmless on a throwaway DB, fatal on a real journal one env var away.
     """
     url = os.environ["TEST_DATABASE_URL"]
     name = urlparse(url).path.lstrip("/")
@@ -51,10 +49,9 @@ def require_test_database_url() -> str:
 
 @pytest.fixture(autouse=True)
 def insecure_cookies(monkeypatch):
-    """`config.COOKIE_SECURE` defaults on, which is right in production and wrong
-    for TestClient: it speaks plain http, so httpx drops a Secure cookie and every
-    follow-up request arrives unauthenticated. Turn it off for the suite; the one
-    test that asserts the production behaviour re-enables it explicitly."""
+    """`COOKIE_SECURE` defaults on, but TestClient speaks plain http, so httpx would
+    drop a Secure cookie and every follow-up request would arrive unauthenticated.
+    Off for the suite; the one test asserting production behaviour re-enables it."""
     import config
 
     monkeypatch.setattr(config, "COOKIE_SECURE", False)
@@ -62,10 +59,9 @@ def insecure_cookies(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def meter_db(monkeypatch):
-    """llm_client persists a usage row for every LLM call through its own
-    engine — point it at a fresh in-memory DB for every test so metering can
-    never write to the real journal.db. Meter tests request this fixture by
-    name to assert on the rows."""
+    """Points llm_client's usage-logging engine at a fresh in-memory DB per test,
+    so metering never writes to journal.db. Meter tests request it by name to
+    assert on the rows."""
     import services.llm_client as llm_client
     import services.quota as quota
 
@@ -106,9 +102,8 @@ def _stub_embeddings(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_demo_user_cache():
-    """services.auth caches the demo user's id (a per-process constant in prod).
-    Each test uses a fresh DB, so clear it around every test or a stale id leaks
-    across tests."""
+    """services.auth caches the demo user's id (a per-process constant in prod);
+    clear it around each test or a stale id leaks across fresh test DBs."""
     import services.auth as auth
 
     auth._demo_user_id = None
@@ -118,10 +113,9 @@ def _reset_demo_user_cache():
 
 @pytest.fixture(autouse=True)
 def quota_headroom(monkeypatch):
-    """The shipped default budget is $0 (the keyless launch posture), which
-    would refuse every attributed LLM call in the suite. Give tests generous
-    headroom so quota only bites where a test explicitly sets a budget —
-    the same opt-in stance as meter_db."""
+    """The shipped default budget is $0, which would refuse every attributed LLM
+    call in the suite. Generous headroom so quota only bites where a test
+    explicitly sets a budget — the same opt-in stance as meter_db."""
     import config
 
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 100.0)
@@ -131,15 +125,10 @@ def quota_headroom(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def rate_limit_headroom(monkeypatch):
-    """The shipped limits are tight on purpose (chat is 5/min), which several
-    route tests would trip just by making a handful of requests. Give every tier
-    generous headroom so the limiter only bites where a test sets a budget
-    explicitly — the same opt-in stance `quota_headroom` takes, and for the same
-    reason: a test failing on a limit it never mentioned is a mystery.
-
-    Headroom rather than 0 (which disables a window entirely), so the limiter's
-    real code path — the upsert, the decision — still runs under every route
-    test rather than being switched off for the whole suite.
+    """Shipped limits are tight (chat is 5/min) and several route tests would trip
+    them just by making a few requests. Headroom, not 0 (which disables the window
+    outright), so the limiter's real upsert-and-decide path still runs under every
+    route test — the same opt-in stance as `quota_headroom`.
     """
     import config
 
@@ -150,16 +139,10 @@ def rate_limit_headroom(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _frozen_rate_limit_clock(monkeypatch):
-    """Pin the limiter's clock for the suite.
-
-    The windows are floored to the wall clock, so a test that sends two requests
-    expecting the second to be refused fails whenever the pair straddles a minute
-    boundary — roughly once every few hundred runs, and only ever on someone
-    else's machine. Freezing it makes the boundary a thing tests choose (by
-    passing `now` explicitly) rather than a thing they race.
-
-    Scoped to `services.rate_limit` only: session expiry and the quota gate read
-    their own `utcnow_naive`, and those tests want the real clock.
+    """Pins the limiter's clock so tests don't race a minute-boundary flake: without
+    this, two requests expecting the second to be refused fail whenever the pair
+    straddles a real clock boundary. Scoped to `services.rate_limit` only — session
+    expiry and the quota gate want the real `utcnow_naive`.
     """
     import services.rate_limit as rate_limit
     from datetime import datetime
@@ -170,9 +153,9 @@ def _frozen_rate_limit_clock(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _reset_rate_limit_sweep():
-    """The counter sweep is throttled by a module-level timestamp (a per-process
-    constant in prod). Tests inject their own `now`, so a stamp left by one test
-    would decide whether another's sweep runs — clear it around each."""
+    """The counter sweep is throttled by a module-level timestamp. Tests inject
+    their own `now`, so a stamp left by one test would decide whether another's
+    sweep runs — clear it around each."""
     import services.rate_limit as rate_limit
 
     rate_limit._last_swept = None
@@ -246,10 +229,9 @@ _OWNED_BY_ME = object()
 def add_entry(client, request):
     """Insert a JournalEntry into the client's DB. Returns the persisted row.
 
-    Owned by `me` by default (lazily logging the client in), since scoped reads
-    only see the logged-in user's rows. Pass another user's id for cross-user
-    isolation tests. `user_id` is NOT NULL since the Postgres migration, so an
-    ownerless row is no longer a valid state.
+    Owned by `me` by default (lazily logs the client in), since scoped reads only
+    see the logged-in user's rows. Pass another user's id for cross-user isolation
+    tests — `user_id` is NOT NULL, so an ownerless row is not a valid state.
     """
     def _add(content, *, user_id=_OWNED_BY_ME, source="text", mood_score=None,
              mood_reasoning=None, timestamp=None, external_id=None):

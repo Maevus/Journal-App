@@ -34,8 +34,7 @@ router = APIRouter()
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "chat_v2.yaml"
 
-# How much of an entry to show in a citation chip — enough to recognise it,
-# not the whole entry.
+# Enough of an entry to recognise it in a citation chip, not the whole entry.
 _SNIPPET_CHARS = 200
 
 
@@ -74,19 +73,13 @@ async def chat(
     user: User = Depends(get_current_user),
     limit: RateLimitDecision = Depends(stream_rate_limit(TIER_CHAT)),
 ):
-    """Multi-turn RAG over the whole journal. The client holds the conversation
-    and POSTs the full message history each turn; the server stays stateless.
-
-    For each turn we condense the latest question (with prior turns as context)
-    into a standalone query, retrieve the most relevant entries for it, then
-    stream a grounded answer that cites entries inline with [n] markers. After
-    the text, a single `event: sources` frame carries the numbered entries so the
-    frontend can render clickable citation chips. Chat ignores the global
-    range/source filters — a question defines its own scope."""
-    # Rate limit: refused before any retrieval or LLM work, because the cost
-    # this bounds is the THREE calls below (condense, date parse, the stream).
-    # A 200 carrying a named frame, not a 429 — EventSource can't read a 4xx
-    # body and would reconnect on it. See services/rate_limit.py.
+    """Multi-turn RAG over the whole journal. Client holds history, server is
+    stateless. Condenses the question, retrieves entries, streams an answer
+    citing them as [n], then an `event: sources` frame for citation chips.
+    Ignores global range/source filters — a question defines its own scope."""
+    # Refused before retrieval/LLM work — bounds the three calls below (condense,
+    # date parse, stream). 200 with a named frame, not 429: EventSource can't read
+    # a 4xx body and would reconnect. See services/rate_limit.py.
     if limit.refused:
         return rate_limited_stream(limit)
 
@@ -103,10 +96,9 @@ async def chat(
             empty_stream(), media_type="text/event-stream", headers=_SSE_HEADERS
         )
 
-    # Prior turns (everything before the current question) give condensation the
-    # context to resolve follow-ups like "and June?" into a standalone query.
-    # Drop any empty-content turns: the Messages API rejects empty non-final
-    # content, and an aborted/errored turn can leave one in the client history.
+    # Prior turns let condensation resolve follow-ups like "and June?". Empty-
+    # content turns are dropped — the Messages API rejects empty non-final
+    # content, and an aborted/errored turn can leave one in client history.
     history = [
         {"role": m.role, "content": m.content}
         for m in messages[:-1]
@@ -114,14 +106,13 @@ async def chat(
     ]
     standalone = await condense_query(history, question, user_id=user.id)
 
-    # Time-scoped questions constrain retrieval to that window; non-scoped get
-    # (None, None) and retrieve over the whole journal.
+    # Time-scoped questions constrain retrieval; non-scoped get (None, None) →
+    # whole journal.
     start, end = await parse_date_range(standalone, user_id=user.id)
     hits = hybrid_search(session, standalone, body.limit, start=start, end=end,
                          user_id=user.id)
-    # A window that matches nothing (a period the journal doesn't cover, or a
-    # mis-parse) shouldn't make the bot claim the journal is empty — fall back to
-    # time-unscoped (still user-scoped) retrieval so it answers from what exists.
+    # A window matching nothing (bad period or mis-parse) shouldn't make the bot
+    # claim the journal is empty — fall back to unscoped (still user-scoped) retrieval.
     if not hits and (start is not None or end is not None):
         hits = hybrid_search(session, standalone, body.limit, user_id=user.id)
 
@@ -136,16 +127,12 @@ async def chat(
     else:
         entries_text = "No journal entries found."
 
-    # Mood aggregate so the agent can answer average/trend questions the ~limit
-    # retrieved entries can't cover — scoped to the same window retrieval used,
-    # so a time-scoped question ("mood in 2024?") summarises that period and an
-    # unscoped one summarises the whole journal. Omitted when nothing's scored
-    # in scope.
+    # Mood aggregate covers average/trend questions the retrieved entries can't —
+    # scoped to the same window as retrieval. Omitted when nothing's scored in scope.
     summary = mood_summary(session, user_id=user.id, start=start, end=end)
     summary_block = f"{render_mood_summary(summary)}\n\n" if summary else ""
 
-    # Sources side-channel: the full numbered set, sent after the text so the
-    # frontend can render a chip for each [n] the answer actually used.
+    # Full numbered source set, sent after the text so the frontend can chip each [n] used.
     sources = [
         {
             "n": i,
@@ -160,8 +147,8 @@ async def chat(
     user_prompt = cfg["user_template"].format(
         mood_summary=summary_block, entries=entries_text, question=question
     )
-    # Prior turns as real user/assistant messages, then the current question as a
-    # user turn carrying the retrieved entries.
+    # Prior turns as real user/assistant messages, then the question as a user
+    # turn carrying the retrieved entries.
     llm_messages = history + [{"role": "user", "content": user_prompt}]
     model = resolve_model(user_id=user.id)  # F3: per-user, not the prompt-YAML value
     max_tokens = cfg.get("max_tokens", 2048)
@@ -178,8 +165,7 @@ async def chat(
                 # JSON-encode each token so newlines in the payload survive the SSE frame.
                 yield f"data: {json.dumps(token)}\n\n"
         except QuotaExceededError as exc:
-            # No sources frame after a refusal — citation chips for an answer
-            # that never happened would be orphans.
+            # No sources frame after a refusal — chips for an answer that never happened.
             yield sse_quota_frame(exc)
             yield "data: [DONE]\n\n"
             return

@@ -39,11 +39,9 @@ _ANY = object()
 def _day_bucket(col):
     """Group a timestamp column by calendar day, portably across dialects.
 
-    SQLite has no date type, so `func.date(col)` returns a 'YYYY-MM-DD' string —
-    the app's convention. Postgres has no plain `date()` scalar, so cast to DATE
-    there (the driver hands back a `datetime.date`, whose `str()` is the same ISO
-    string). Both feed the same `by_date` key that daily's `.date().isoformat()`
-    looks up. The SELECT and GROUP BY must use the identical expression.
+    SQLite's `func.date(col)` returns a 'YYYY-MM-DD' string; Postgres has no
+    plain `date()` scalar, so cast to DATE there instead — both land on the
+    same ISO string `by_date` looks up.
     """
     if engine.dialect.name == "postgresql":
         return cast(col, Date)
@@ -55,10 +53,8 @@ class QuotaExceededError(Exception):
 
 
 def sse_quota_frame(exc: QuotaExceededError) -> str:
-    """The named SSE frame both LLM streams emit on refusal (decided
-    2026-07-13): the refusal rides inside the 200 stream because EventSource
-    can't read a 4xx body. Lives next to the exception so the wire payload
-    the frontend parses has exactly one definition."""
+    """The named SSE frame both LLM streams emit on refusal — rides inside a
+    200 stream because EventSource can't read a 4xx body."""
     payload = {"code": "quota_exhausted", "message": str(exc)}
     return f"event: quota\ndata: {json.dumps(payload)}\n\n"
 
@@ -69,10 +65,9 @@ def _utc_day_start() -> datetime:
 
 
 def _tier_budget(session: Session, user_id: int) -> float:
-    """The keyless daily budget for `user_id` — the demo user gets the demo
-    budget, everyone else the free tier. Per-user (not a global mode) since one
-    app now serves the demo visitor and real users at once. Shared by check_quota
-    and usage_snapshot so the two can't disagree."""
+    """The keyless daily budget for `user_id`: demo budget for the demo user,
+    free tier otherwise. Shared by check_quota and usage_snapshot so the two
+    can't disagree."""
     from services.auth import is_demo_user_id  # local import: avoids an import cycle
 
     if is_demo_user_id(session, user_id):
@@ -90,19 +85,17 @@ def _user_spend_since(session: Session, *, user_id: int, since: datetime) -> flo
 
 
 def _reservation_floor(day_start: datetime) -> datetime:
-    """The cutoff below which a reservation stops counting.
-
-    Two things retire one: the UTC rollover that resets the budget it was taken
-    against, and RESERVATION_TTL, which bounds how long a call that died before
-    settling can hold headroom hostage. Whichever is later wins.
+    """The cutoff below which a reservation stops counting: the later of the
+    UTC rollover (resets the budget it was taken against) and RESERVATION_TTL
+    (bounds how long a dead call can hold headroom hostage).
     """
     return max(day_start, utcnow_naive() - config.RESERVATION_TTL)
 
 
 def _reserved_since(session: Session, *, user_id: object, since: datetime) -> float:
-    """SUM(amount) of live reservations — headroom claimed by calls that are
-    in flight but not yet metered. `user_id` is `_ANY` for the global cap
-    (every reservation is spend on our key), or an id for one user's budget.
+    """SUM(amount) of live reservations — headroom claimed by calls in
+    flight but not yet metered. `user_id` is `_ANY` for the global cap, or
+    an id for one user's budget.
     """
     stmt = select(func.coalesce(func.sum(QuotaReservation.amount), 0.0)).where(
         QuotaReservation.created_at >= since
@@ -115,15 +108,12 @@ def _reserved_since(session: Session, *, user_id: object, since: datetime) -> fl
 def _serialize_across_processes(session: Session) -> None:
     """Hold the gate's read-then-reserve against every other checker.
 
-    The reservation only closes the race if the SUM and the INSERT are one
-    indivisible step. `_gate_lock` does that within this process; on Postgres,
-    where production runs several workers, an advisory lock extends it across
-    them. It is transaction-scoped, so it releases on commit OR rollback —
-    including the rollback the fail-closed path takes.
-
-    One global lock, not one per user: the global cap sums every user's spend,
-    so it has to serialize globally regardless. The critical section is a
-    couple of indexed aggregates, so the contention is not worth splitting.
+    The reservation only closes the read-then-act race if the SUM and the
+    INSERT are one indivisible step: `_gate_lock` does that within this
+    process, and on Postgres a transaction-scoped advisory lock (releases on
+    commit OR rollback) extends it across the multiple workers production
+    runs. One global lock, not per-user, since the global cap sums every
+    user's spend and must serialize globally regardless.
     """
     if engine.dialect.name == "postgresql":
         session.exec(select(func.pg_advisory_xact_lock(_GATE_LOCK_KEY)))
@@ -137,53 +127,39 @@ def check_quota(
 ) -> Optional[int]:
     """Refuse (raise QuotaExceededError) when the user's LLM spend since UTC
     midnight has reached their daily budget. `>=`, not `>`: a $0 budget must
-    refuse at $0 spent — that's the keyless launch posture.
+    refuse at $0 spent.
 
-    `user_id` is required keyword-only (the house pattern): every check must
-    state whose budget it's spending against. Explicit None = system work
-    (the user-less startup-sync scoring): charged to nobody's budget, so the
-    per-user check doesn't apply — only the global cap can stop it.
+    `user_id` is required keyword-only; explicit None means system work,
+    charged to nobody, where only the global cap applies. `on_own_key`, when
+    already known to the caller, skips a redundant key-row read.
 
-    `on_own_key` is the post-F5 lookup consolidation: the llm_client entry
-    points already read the user's key row (resolve_api_key), so they pass its
-    presence here instead of this gate re-reading the same row. None (the
-    default, for callers that haven't looked) keeps the self-serve lookup.
-
-    `estimated_cost` is what this call might cost at worst. Summing the meter
-    alone only sees calls that have already finished, so concurrent checkers
-    all read the same stale total and all pass — proven at 20 calls spending
-    $11 against a $1 budget. Declaring the worst case makes the admitted call
-    visible to the next checker immediately: it is reserved in the same
-    serialized transaction as the sums, and the returned id must be handed to
-    release_reservation when the call ends so the unspent part goes back.
-    Callers that pass nothing reserve nothing — they keep the old read-only
-    behavior, and the old race with it.
+    `estimated_cost` is this call's worst case, reserved atomically alongside
+    the budget check — summing only finished calls let concurrent checkers all
+    read the same stale total and all pass (proven at 20 calls spending $11
+    against a $1 budget). The returned reservation id must reach
+    release_reservation when the call ends. Callers passing nothing reserve
+    nothing, keeping the old read-only race.
     """
     day_start = _utc_day_start()
     try:
         with Session(engine) as session:
-            # F4: a user on their own key spends their own money on their own
-            # key — neither cap applies (both protect OUR key). Exempt them
-            # before touching either cap, and before taking the gate lock: an
-            # exempt call never reserves, so it need not serialize.
+            # F4: a BYO-key user spends their own money, so neither cap
+            # applies. Exempt before the gate lock — an exempt call never
+            # reserves, so it need not serialize.
             if user_id is not None:
                 if on_own_key is None:
                     on_own_key = key_store.has_user_key(session, user_id=user_id)
                 if on_own_key:
                     return None  # nothing reserved, so nothing to release
 
-        # Everything from here — both sums, both comparisons, and the
-        # reservation — is one indivisible step, or concurrent callers all
-        # measure the same stale meter and all pass.
+        # Everything from here is one indivisible step, or concurrent callers
+        # all measure the same stale meter and all pass.
         with _gate_lock, Session(engine) as session:
             _serialize_across_processes(session)
             since = _reservation_floor(day_start)
-            # Global cap — the kill-switch bounding the worst day our key can
-            # have, so it applies to every call, system work included. It sums
-            # only spend on OUR key: BYO users' own-key spend is metered for
-            # their usage widget but must not refuse everyone else (F4c), so
-            # rows from key-holders are excluded. `user_id IS NULL` (system
-            # work) is always on our key, so it counts.
+            # Global cap: sums spend on OUR key only — BYO users' own-key
+            # spend is metered for their widget but excluded here so it can't
+            # refuse everyone else (F4c). `user_id IS NULL` is always our key.
             global_spent = session.exec(
                 select(func.coalesce(func.sum(LLMUsage.cost), 0.0))
                 .where(LLMUsage.created_at >= day_start)
@@ -201,9 +177,7 @@ def check_quota(
                 )
 
             if user_id is not None:
-                # Keyless budget for this user: the demo user gets the demo
-                # budget, everyone else the free tier (per-user, resolved from
-                # the same session). A key-holder was already exempted above.
+                # Keyless budget (key-holders were already exempted above).
                 budget = _tier_budget(session, user_id)
                 spent = _user_spend_since(session, user_id=user_id, since=day_start)
                 spent += _reserved_since(session, user_id=user_id, since=since)
@@ -213,9 +187,8 @@ def check_quota(
                         f"(${spent:.4f} of ${budget:.2f} spent today)"
                     )
 
-            # Admitted. Claim this call's worst-case cost so the next checker
-            # counts it — committed before we return, so no call escapes the
-            # window between passing the gate and being metered.
+            # Admitted. Claim the worst-case cost so the next checker counts
+            # it, committed before returning.
             if estimated_cost > 0:
                 claim = QuotaReservation(user_id=user_id, amount=estimated_cost)
                 session.add(claim)
@@ -224,8 +197,7 @@ def check_quota(
     except QuotaExceededError:
         raise
     except Exception as exc:
-        # Fails closed: a check we can't run is a call we don't make. Callers
-        # get the same refusal type they already handle.
+        # Fails closed: a check we can't run is a call we don't make.
         logger.exception("quota check failed — refusing the call (fails closed)")
         raise QuotaExceededError("quota check unavailable") from exc
 
@@ -233,15 +205,11 @@ def check_quota(
 def release_reservation(reservation_id: Optional[int], *, session: Optional[Session] = None) -> None:
     """Drop a reservation once its call is over, however it ended.
 
-    The mirror of check_quota's claim, and the reason a worst-case estimate is
-    safe to charge: the over-claim is only held for the life of the call. Pass
-    the caller's `session` to release inside the transaction that writes the
-    real LLMUsage row — otherwise there is an instant where the claim is gone
-    and the spend has not landed, and a checker in that gap sees neither.
-
-    Never raises. A leaked reservation is already survivable (RESERVATION_TTL
-    retires it), so failing here must not take down the call it belongs to —
-    the same stance as the meter write it rides along with.
+    Pass the caller's `session` to release inside the transaction that writes
+    the real LLMUsage row — otherwise there's an instant where the claim is
+    gone and the spend hasn't landed, and a checker in that gap sees neither.
+    Never raises: a leaked reservation is survivable (RESERVATION_TTL retires
+    it), so failing here must not take down the call it belongs to.
     """
     if reservation_id is None:
         return
@@ -257,8 +225,7 @@ def release_reservation(reservation_id: Optional[int], *, session: Optional[Sess
 
 
 def _delete_reservation(session: Session, reservation_id: int) -> None:
-    """Delete one reservation row, if it is still there (the TTL sweep or a
-    retry may have got there first)."""
+    """Delete one reservation row, if the TTL sweep or a retry hasn't already."""
     claim = session.get(QuotaReservation, reservation_id)
     if claim is not None:
         session.delete(claim)
@@ -277,20 +244,14 @@ class UsageSnapshot:
 
 
 def usage_snapshot(*, user_id: int, days: int = 30) -> UsageSnapshot:
-    """`user_id`'s spend, read from the same meter table check_quota gates on
-    (via the module `engine`, not an injected session): today's spend + call
-    count, the tier budget and what's left, and a per-day breakdown for the chart.
+    """`user_id`'s spend: today's total + call count, tier budget and what's
+    left, and a per-day breakdown for the chart.
 
-    Deliberately counts metered spend only, not the reservations the gate also
-    sums. This is a statement about money actually spent — a reservation is a
-    worst case that is usually refunded, and showing it would make the widget
-    jump up and drop back on every call. The cost is that while calls are in
-    flight `remaining_usd` reads higher than what the gate will actually admit;
-    it converges the moment they settle.
-
-    A key-holder is uncapped (budget/remaining None) — their own-key spend is
-    still metered and shown here, it just gates nobody (F4). Spend is scoped to
-    this user (LLMUsage.user_id) so one user never sees another's numbers.
+    Counts metered spend only, not the gate's reservations — a reservation is
+    a worst case usually refunded, and showing it would make the widget jump
+    on every call. Trade-off: `remaining_usd` reads high while calls are in
+    flight, converging once they settle. A key-holder is uncapped
+    (budget/remaining None) but their spend is still metered and shown here.
     """
     day_start = _utc_day_start()
     window_start = day_start - timedelta(days=days - 1)

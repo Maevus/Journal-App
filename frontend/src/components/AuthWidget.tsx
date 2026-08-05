@@ -1,14 +1,8 @@
 import type { AuthUser } from '../api/client'
 
-/** Signed-in header state: the email plus a sign-out button. Purely
- *  presentational — App owns useAuth and only renders this when a user
- *  exists; the logged-out state is the full-screen LoginGate.
- *
- *  Demo mode shows a "Demo" badge and NO sign-out: the demo is a shared
- *  showcase account, not a real login (get_current_user hard-resolves to it
- *  whenever IS_DEMO). Offering sign-out there nulled the user → dropped onto
- *  the LoginGate → whose "Sign in with Google" can only error or be ignored.
- *  Removing the button keeps LoginGate's "never shown in demo" invariant true. */
+/** Signed-in header state: email + sign-out button; LoginGate covers the
+ *  logged-out state. Demo mode shows a "Demo" badge instead, since it's a
+ *  shared account, not a real login, with nowhere useful for sign-out to send you. */
 export function AuthWidget({ user, onSignOut }: { user: AuthUser; onSignOut: () => void }) {
   if (user.demo) {
     return (

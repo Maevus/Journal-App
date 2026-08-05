@@ -1,9 +1,7 @@
 import { loginUrl } from '../api/client'
 
-/** Top strip for the signed-out demo (hosting shape B): a visitor who lands
- *  without an account is resolved to the seeded demo user and sees a read-only
- *  sample journal. This explains that and offers the way out — sign in with
- *  Google to start their own. App renders it only when `user.demo` is true. */
+/** Top strip for the signed-out demo: an anonymous visitor is resolved to
+ *  the read-only demo journal; this explains that and offers sign-in. Shown only when `user.demo` is true. */
 export function DemoBanner() {
   return (
     <div className="border-b-4 border-ink bg-lilac px-4 py-2.5 text-white sm:px-6">

@@ -1,8 +1,7 @@
 """Tests for the GoodNotes scan scheduler wiring in main.py.
 
-The scheduler-wiring helper (`_start_goodnotes_scheduler`) is tested directly
-rather than through the full lifespan, so we can assert on job registration
-without standing up the whole app."""
+`_start_goodnotes_scheduler` is tested directly, not through the full lifespan,
+so job registration can be asserted without standing up the whole app."""
 import config
 import main
 

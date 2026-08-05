@@ -1,9 +1,9 @@
 """GET /usage — the per-user spend widget (freemium F5).
 
-The widget must report exactly what the quota gate measures, so these tests
-seed the *meter* DB (the one check_quota/_log_usage share — `meter_db`), not the
-route session's DB. A key-holder is uncapped; everyone else sees tier budget +
-remaining. Spend is scoped to the asking user and to the UTC-day window.
+Must report exactly what the quota gate measures, so tests seed the *meter* DB
+(`meter_db`, shared by check_quota/_log_usage) rather than the route session's
+DB. Key-holders are uncapped; everyone else sees tier budget + remaining,
+scoped to the asking user and the UTC-day window.
 """
 from datetime import timedelta
 

@@ -1,9 +1,8 @@
-"""Re-embed every journal entry into the pgvector store (the Chroma→pgvector move).
+"""Re-embed every journal entry into the pgvector store.
 
-The one-time fill after the switch: iterate all JournalEntry rows in Postgres,
-embed each with fastembed, upsert into entry_embeddings. Local and free (no API).
-Idempotent — re-running overwrites. Run the migration first, then this. From
-backend/ with DATABASE_URL pointing at Postgres:
+Iterates all JournalEntry rows, embeds each with fastembed, upserts into
+entry_embeddings. Local and free (no API). Idempotent — re-running overwrites.
+Run migrations first. From backend/ with DATABASE_URL pointing at Postgres:
 
     DATABASE_URL=postgresql+psycopg://…  python scripts/embed_backfill.py
 """

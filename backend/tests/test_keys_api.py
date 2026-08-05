@@ -1,7 +1,7 @@
 """GET/POST/DELETE /keys — BYO key entry, validated against Anthropic on save.
 
-`key_is_valid` (the live Anthropic check) is stubbed so tests never hit the
-network. Storage runs through the real key_store on the client's DB.
+`key_is_valid` is stubbed so tests never hit the network; storage runs
+through the real key_store.
 """
 import pytest
 from cryptography.fernet import Fernet
@@ -79,16 +79,14 @@ def test_demo_mode_blocks_key_management(client, monkeypatch):
     assert client.post("/keys", json={"api_key": "sk-ant-x"}).status_code == 403
 
 
-# Every route that MUTATES state, with a valid request shape so a failure is the
-# read-only gate (403) and never validation (422). The demo account is shared by
-# all signed-out visitors, so a write from one is visible to every other — and
-# could clear the account's stored key. `require_writable_user` is what enforces
-# this; when a new mutating route is added it belongs in this list too.
+# Every state-mutating route (valid shape, so a failure is 403, not 422). The
+# demo account is shared by every signed-out visitor, so a write from one
+# affects the next — require_writable_user enforces this; new mutating
+# routes belong in this list too.
 #
-# POST /search and POST /stream/chat are deliberately absent: they are POSTs but
-# read nothing back into the database, and the demo is meant to exercise them
-# (bounded by DEMO_DAILY_USD). POST /auth/logout is absent because for a demo
-# visitor there is no session cookie to revoke, so it is already a no-op.
+# /search and /stream/chat are absent: POSTs that write nothing, and the
+# demo is meant to exercise them (bounded by DEMO_DAILY_USD). /auth/logout
+# is absent — a demo visitor has no session cookie to revoke.
 WRITE_ROUTES = [
     ("post", "/ingest", {"json": {"entries": ["a new entry"], "source": "text"}}),
     ("post", "/keys", {"json": {"api_key": "sk-ant-x"}}),

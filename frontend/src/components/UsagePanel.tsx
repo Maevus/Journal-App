@@ -24,10 +24,8 @@ const modelFamily = (model: string) => {
  *  $0.008 day doesn't render as a confusing "$0.01". */
 const usd = (v: number) => `$${v.toFixed(v > 0 && v < 0.01 ? 4 : 2)}`
 
-/** Per-user LLM spend (F5): today's numbers, the tier cap (or "own key, no
- *  cap"), and a 30-day spend chart. Every number is the quota gate's own view
- *  (GET /usage reads the same meter the gate enforces). `demo` relabels the
- *  tier chip — the shared demo account has its own budget, not a "free tier". */
+/** Per-user LLM spend: today's numbers, the tier cap, and a 30-day chart.
+ *  Reads the same meter the quota gate enforces. `demo` relabels the chip, since the shared demo account has its own budget, not a "free tier". */
 export function UsagePanel({ demo = false }: { demo?: boolean }) {
   const { data, loading, error } = useUsage()
 

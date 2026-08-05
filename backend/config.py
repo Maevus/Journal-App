@@ -1,15 +1,11 @@
-"""
-Central runtime config.
+"""Central runtime config.
 
-Postgres is the only database the app runs on. There is no SQLite fallback:
-running on two engines meant two journals, and they diverged — SQLite ended up
-holding 33 entries Postgres never saw while Postgres held 7 SQLite never saw.
-A missing DATABASE_URL is now an error rather than a silent second source of
-truth. (The test suite still uses its own throwaway in-memory SQLite; nothing
-persists there.)
+Postgres is the only database the app runs on — no SQLite fallback; a
+missing DATABASE_URL is an error, not a silent second source of truth.
+(Tests use their own throwaway in-memory SQLite, untouched by this path.)
 
-APP_MODE selects the demo user and Keep-sync default, not the database — both
-modes share one Postgres, and demo-ness is per-user (services/auth.py).
+APP_MODE selects the demo user and Keep-sync default, not the database —
+both modes share one Postgres, and demo-ness is per-user (services/auth.py).
 
   APP_MODE=real  (default) → sync on
   APP_MODE=demo            → sync off, requests resolve to the demo user
@@ -26,9 +22,7 @@ if APP_MODE not in _MODES:
 
 IS_DEMO = APP_MODE == "demo"
 
-# Postgres or nothing. No default: a defaulted DATABASE_URL is how the app
-# quietly opened a second journal on disk. Tests set their own engine directly
-# and never import this path.
+# No default — tests set their own engine directly and never import this path.
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 if not DATABASE_URL:
     raise RuntimeError(
@@ -50,148 +44,106 @@ SYNC_ON_STARTUP = os.getenv(
 ).lower() not in ("0", "false", "no")
 
 # Minutes between scheduled GoodNotes folder scans. 0 (default) disables the
-# scheduler entirely; a positive value starts an interval job at startup that
-# picks up newly-appended pages of the growing GoodNotes PDF backup.
+# scheduler; a positive value polls for newly-appended pages.
 GOODNOTES_SCAN_INTERVAL_MIN = int(os.getenv("GOODNOTES_SCAN_INTERVAL_MIN", "0"))
 
 # --- Freemium quotas (ADR 0003, F2) ---
-# Daily LLM budgets in dollars over a UTC-day window, read at call time by
-# services/quota.py. The launch posture (docs/decisions.md, 2026-07-03): the
-# free tier costs us $0 — keyless users get budget $0 and a friendly refusal;
-# LLM features unlock with a BYO key (F4). Flipping to a subsidized budget
-# later is an env change, not a redesign.
+# Daily LLM budgets in dollars, UTC-day window, read at call time by
+# services/quota.py. Free tier defaults to $0 (BYO key unlocks LLM use, F4).
 FREE_TIER_DAILY_USD = float(os.getenv("FREE_TIER_DAILY_USD", "0"))
 
 # --- Freemium model resolution (ADR 0003, F3) ---
-# Which model each tier runs. The free tier gets the cheap model; the demo
-# showcase gets the premium one (bounded by DEMO_DAILY_USD + the global cap).
-# Env-tunable, and provider-shaped as a plain string so per-user model config
-# (F4, BYO keys) slots in without a redesign. Pricing stays data-driven in
+# Which model each tier runs; env-tunable. Pricing is data-driven in
 # llm_client._PRICING, keyed on whatever string resolves here.
 FREE_TIER_MODEL = os.getenv("FREE_TIER_MODEL", "claude-haiku-4-5")
 DEMO_MODEL = os.getenv("DEMO_MODEL", "claude-opus-4-8")
 
 # --- Freemium BYO keys (ADR 0003, F4) ---
-# Fernet key (urlsafe-base64, 32 bytes) that encrypts users' own API keys at
-# rest. Generate one with: python -c "from cryptography.fernet import Fernet;
-# print(Fernet.generate_key().decode())". Must be STABLE across restarts (unlike
-# SESSION_SECRET) or stored keys become undecryptable — so no random default:
-# unset simply means the BYO-key feature is off (services/key_store.py raises a
-# clear error only when a key is actually stored or read, never at startup).
-# A user running Opus on their own key is what this unlocks (F4).
+# Fernet key (32 bytes, urlsafe-base64) encrypting users' API keys at rest.
+# Generate: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+# Must stay STABLE across restarts or stored keys become undecryptable.
+# Unset = BYO-key feature off (services/key_store.py errors only on use).
 APP_ENCRYPTION_KEY = os.getenv("APP_ENCRYPTION_KEY")
 
-# Which model a BYO-key user runs — they pay their own way, so they get the
-# premium model, not the free-tier default. Env-tunable like the others.
+# BYO-key users pay their own way, so they get the premium model, not free-tier.
 BYO_KEY_MODEL = os.getenv("BYO_KEY_MODEL", "claude-opus-4-8")
 
-# The seeded demo user runs the showcase, so the $0 free tier would refuse it
-# (chat always, synthesis on any cache miss). The demo gets its own small budget
-# instead — bounded per day and backstopped by the global cap. Applied per-user
-# (whoever IS the demo user), not per-app, since one instance now serves the demo
-# visitor and real logged-in users at once.
+# The demo user gets its own small daily budget (else the $0 free tier would
+# refuse the showcase), applied per-user since one instance serves both the
+# demo visitor and real logged-in users.
 DEMO_DAILY_USD = float(os.getenv("DEMO_DAILY_USD", "1"))
 
-# Public demo (hosting shape B): when on, an unauthenticated request falls back to
-# the seeded demo user (read-only) instead of 401 — so a visitor who lands without
-# an account sees the demo, and signing in gives them their own journal in the same
-# app. Off (default) = private instance: logged-out → 401. Distinct from
-# APP_MODE=demo, which resolves EVERY request (even logged-in) to the demo user.
+# When on, an unauthenticated request resolves to the demo user (read-only)
+# instead of 401. Off (default) = private instance. Distinct from
+# APP_MODE=demo, which resolves EVERY request, even logged-in ones.
 PUBLIC_DEMO = os.getenv("PUBLIC_DEMO", "0").lower() not in ("0", "false", "no", "")
 
-# Service-wide daily spend cap across ALL users and system work — the
-# kill-switch that bounds the worst day our API key can have. Defaults to a
-# real number rather than "unset = uncapped": a kill-switch that defaults to
-# off isn't one.
+# Service-wide daily spend cap — the kill-switch bounding the worst day our
+# API key can have. Defaults on: a kill-switch that defaults off isn't one.
 GLOBAL_DAILY_USD = float(os.getenv("GLOBAL_DAILY_USD", "5"))
 
-# How long the quota gate counts a reservation (headroom claimed by an LLM call
-# that started but hasn't been metered yet — see models.usage.QuotaReservation).
-# A call that dies between passing the gate and settling leaves its row behind,
-# so this bounds how long that stranded headroom stays out of circulation. It
-# must outlast the slowest legitimate call: too short and a long stream stops
-# protecting the budget it was admitted against, too long and a crash locks the
-# budget up. Streams are capped well under this.
+# How long the quota gate counts a reservation — headroom claimed by a call
+# that started but hasn't been metered (models.usage.QuotaReservation),
+# bounding how long a crashed call's claim stays stranded. Must outlast the
+# slowest legitimate stream.
 RESERVATION_TTL = timedelta(minutes=int(os.getenv("RESERVATION_TTL_MINUTES", "15")))
 
 # --- Auth: Sign in with Google (ADR 0003) ---
-# OAuth client credentials from Google Cloud Console → Credentials → OAuth
-# client ID (type "Web application", redirect URI http://localhost:8000/auth/callback).
-# Distinct from GOOGLE_EMAIL/GOOGLE_APP_MASTER_TOKEN, which are Keep-ingestion creds.
+# OAuth client creds (Google Cloud Console → Credentials → OAuth client ID,
+# type "Web application"). Distinct from the Keep-ingestion creds below.
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("GOOGLE_OAUTH_CLIENT_ID", "")
 GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("GOOGLE_OAUTH_CLIENT_SECRET", "")
 
-# Signs the short-lived SessionMiddleware cookie that carries the in-flight
-# OAuth `state` between /auth/login and /auth/callback. Unset → random per
-# boot, which is fine in dev (the only casualty is a login mid-restart);
-# production must pin it so logins survive restarts and multiple workers.
+# Signs the short-lived OAuth `state` cookie between /auth/login and
+# /auth/callback. Unset → random per boot (fine in dev); production must
+# pin it so logins survive restarts and multiple workers.
 SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 
 # Where the callback sends the browser after login — the SPA's origin.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
 
-# Run `alembic upgrade head` during app startup. Convenient in dev (one command
-# to a working server) and wrong in production: it applies DDL to real data with
-# no human checkpoint, and N workers race to do it at once. Set AUTO_MIGRATE=0
-# there and run the upgrade as an explicit deploy step.
+# Runs `alembic upgrade head` at startup. Convenient in dev; wrong in
+# production (DDL on real data with no checkpoint, N workers racing) — set
+# AUTO_MIGRATE=0 there and migrate as an explicit deploy step.
 AUTO_MIGRATE = os.getenv("AUTO_MIGRATE", "1").lower() not in ("0", "false", "no", "")
 
-# `Secure` on the session cookie. Deriving this from request.url.scheme is wrong
-# behind a TLS-terminating proxy: the app sees plain http from the load balancer
-# and would ship the session token without Secure, leaking it to anyone who can
-# nudge the user to http://. So it is explicit config, defaulting to on.
-# Browsers accept Secure cookies on http://localhost, so dev works unchanged —
-# set COOKIE_SECURE=0 only if serving dev over a plain-http LAN address.
+# `Secure` on the session cookie, explicit rather than derived from
+# request.url.scheme — behind a TLS-terminating proxy that reads plain http
+# and would ship the token unprotected. Defaults on; browsers accept Secure
+# cookies on localhost, so dev is unaffected.
 COOKIE_SECURE = os.getenv("COOKIE_SECURE", "1").lower() not in ("0", "false", "no", "")
 
-# Where fastembed caches the ~90 MB embedding model. Unset, it lands in the
-# system temp dir, which scale-to-zero hosts wipe between cold starts — turning
-# the first search of each cold start into a synchronous download inside the
-# request. Point this at persistent storage, or bake the model into the image at
-# this path (see backend/Dockerfile, which does the latter).
+# Where fastembed caches the ~90 MB embedding model. Unset lands in system
+# temp, which scale-to-zero hosts wipe — turning the first search of each
+# cold start into a synchronous download. backend/Dockerfile bakes it in.
 FASTEMBED_CACHE_DIR = os.getenv("FASTEMBED_CACHE_DIR", "")
 
 # --- Trust boundary: which peers may speak for another caller ---
-# Comma-separated addresses (CIDR ranges allowed) of the reverse proxy or load
-# balancer sitting directly in front of the app. The sole input to
-# services/client_ip.py, which every per-IP rate limit keys on.
-#
-# Unset (the default, and what scripts/dev.sh runs) means "nothing in front of
-# me": the socket peer is the caller and `X-Forwarded-For` — a header anyone on
-# the wire can write — is ignored outright. Set it and the app believes XFF, but
-# only when the request actually arrived from one of these peers.
-#
-# Wrong in either direction, and silently so. Too wide ("*", or a range you
-# don't control) and an attacker forges a fresh XFF per request, giving every
-# request its own bucket and voiding every per-IP limit. Too narrow (unset,
-# behind a load balancer) and the whole internet shares the balancer's address
-# as a single bucket. backend/Dockerfile passes this exact value to uvicorn's
-# --forwarded-allow-ips so the ASGI server and the app cannot disagree about
-# who is allowed to speak for someone else.
+# CIDR-allowed addresses of the reverse proxy in front of the app — the sole
+# input to services/client_ip.py, which every per-IP rate limit keys on.
+# Unset (default) ignores X-Forwarded-For outright. Wrong silently either
+# way: too wide ("*") lets an attacker forge XFF and void every per-IP
+# limit; too narrow (unset behind a real balancer) buckets the whole
+# internet as one caller. backend/Dockerfile passes this same value to
+# uvicorn's --forwarded-allow-ips so the two agree.
 TRUSTED_PROXY_IPS = os.getenv("TRUSTED_PROXY_IPS", "")
 
 # --- Per-identity rate limits (docs/decisions.md, 2026-08-04) ---
 # Requests allowed per fixed window, per caller, per route tier — enforced by
-# services/rate_limit.py. Two windows per tier: the per-minute one bounds a
-# burst, the per-hour one bounds the sustained rate a burst-shaped abuser could
-# otherwise keep up all day by pausing between minutes. 0 disables that window,
-# which is also the per-tier escape hatch if a limit misfires in production;
-# there is deliberately no global off switch, because a global off switch is a
-# thing you leave off.
+# services/rate_limit.py. Two windows per tier: per-minute bounds a burst,
+# per-hour bounds a burst-shaped abuser pacing itself all day. 0 disables
+# that window (also the per-tier escape hatch); no global off switch, on
+# purpose.
 #
-# The numbers are budgets for what a request COSTS US, not guesses at
-# politeness:
-#   chat       three LLM calls per request (condense, date parse, the stream),
-#              and Opus for the demo user
-#   synthesis  one LLM call, LRU-cached, so a repeat request is free
+# Budgets reflect what a request COSTS US:
+#   chat       three LLM calls per request (condense, date parse, stream)
+#   synthesis  one LLM call, LRU-cached — a repeat request is free
 #   ingest     inline OCR per PDF page + a background scoring call per entry
-#   keys       a live Anthropic auth check with no quota gate in front of it,
-#              and a password-guessing surface besides
+#   keys       a live Anthropic auth check, no quota gate, password-guessing surface
 #   search     a local ONNX encode — CPU, not money, so the ceiling is higher
 #   auth       the login handshake; always keyed per IP, never per user
-# Cheap reads (/trends, /entries, /usage, /auth/me) carry no limiter at all.
-# /health likewise — it is the container HEALTHCHECK every 30s, and throttling
-# that restarts the container under the load it should survive.
+# Cheap reads (/trends, /entries, /usage, /auth/me) and /health (the
+# container HEALTHCHECK every 30s) carry no limiter.
 RATE_LIMIT_CHAT_PER_MIN = int(os.getenv("RATE_LIMIT_CHAT_PER_MIN", "5"))
 RATE_LIMIT_CHAT_PER_HOUR = int(os.getenv("RATE_LIMIT_CHAT_PER_HOUR", "40"))
 RATE_LIMIT_SYNTHESIS_PER_MIN = int(os.getenv("RATE_LIMIT_SYNTHESIS_PER_MIN", "10"))

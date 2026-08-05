@@ -1,8 +1,8 @@
 """POST /search — hybrid 70% semantic (pgvector) + 30% BM25 fusion.
 
-`search_similar` (the vector-store call) is stubbed so the semantic signal is
-controlled; BM25 is computed for real from entry content. The fusion now lives
-in `services.retrieval`, so the stub is applied there.
+`search_similar` is stubbed so the semantic signal is controlled; BM25 runs for
+real over entry content. Fusion lives in `services.retrieval`, so the stub is
+applied there.
 """
 import services.retrieval as retrieval
 

@@ -19,10 +19,10 @@ from services.quota import QuotaExceededError
 def sync_owner(session, monkeypatch):
     """Give the Keep/GoodNotes connectors a resolvable owner.
 
-    Both resolve their rows' owner via `_resolve_sync_owner` (GOOGLE_EMAIL → the
-    matching user). Since the Postgres migration JournalEntry.user_id is NOT
-    NULL, so a sync with no resolvable owner ingests nothing — set up the env +
-    a matching user so persistence tests actually persist. Returns the owner.
+    Both resolve via `_resolve_sync_owner` (GOOGLE_EMAIL → matching user);
+    JournalEntry.user_id is NOT NULL, so a sync with no resolvable owner
+    ingests nothing. Sets up the env + a matching user so persistence tests
+    actually persist. Returns the owner.
     """
     owner = User(google_sub="sync-owner", email="sync@owner.com")
     session.add(owner)
@@ -225,9 +225,9 @@ async def test_ingest_goodnotes_image_file(session, monkeypatch, tmp_path, sync_
 async def test_ingest_goodnotes_quota_stops_scan_but_keeps_paid_pages(
     session, monkeypatch, tmp_path, sync_owner
 ):
-    """A quota refusal mid-scan stops further OCR (every later call would be
-    refused too) but still ingests the pages already transcribed — that money
-    is spent, so the transcripts must not be thrown away."""
+    """A quota refusal mid-scan stops further OCR, but pages already
+    transcribed still ingest — that money is spent, so the transcripts must
+    not be discarded."""
     _write_pdf_pages(tmp_path / "Journal.pdf", 3)
     monkeypatch.setenv("GOODNOTES_PATH", str(tmp_path))
     calls = {"n": 0}
@@ -251,8 +251,8 @@ async def test_ingest_goodnotes_missing_folder(session, monkeypatch):
     assert stats["updated"] == 0
     assert stats["skipped"] == 0
     assert entries == []
-    # A stale path must not read as "nothing new" — that ambiguity hid a
-    # 7-week ingestion outage when Drive renamed the export folder.
+    # A stale path must not read as "nothing new" — that ambiguity once hid a
+    # 7-week outage when Drive renamed the export folder.
     assert "/no/such/path/xyz" in stats["error"]
 
 

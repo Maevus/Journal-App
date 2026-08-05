@@ -4,10 +4,9 @@ Revision ID: 574e9ccc3743
 Revises: 1de5e47dfa1d
 Create Date: 2026-07-24 11:33:25.557039
 
-The vector store, moved out of Chroma into Postgres (pgvector). Hand-written
-because autogenerate emits neither the extension, the vector(384) column, nor the
-HNSW index. Postgres-only: guarded so it no-ops on the SQLite demo/tests (which
-have no pgvector and never build this table — it lives outside SQLModel.metadata).
+The vector store, in Postgres (pgvector) since Chroma. Hand-written —
+autogenerate can't emit the extension, vector(384) column, or HNSW index.
+Postgres-only; no-ops on SQLite (outside SQLModel.metadata).
 """
 from typing import Sequence, Union
 
@@ -36,11 +35,9 @@ def upgrade() -> None:
     )
     # Isolation filter (search_similar always scopes WHERE user_id).
     op.execute("CREATE INDEX ix_entry_embeddings_user_id ON entry_embeddings (user_id)")
-    # ANN index for cosine distance (<=>), matching search_similar's operator.
-    # Covers `embedding` only. Every search also filters on user_id, which this
-    # index cannot express, so the filter is applied to whatever the scan already
-    # returned — see the _ITERATIVE_SCAN note in services/embeddings.py for why
-    # that needs pgvector >= 0.8 to be correct rather than merely lucky.
+    # ANN index for cosine distance (<=>), covering `embedding` only — user_id
+    # filtering is applied post-scan (needs pgvector >= 0.8; see
+    # _ITERATIVE_SCAN in services/embeddings.py).
     op.execute(
         "CREATE INDEX ix_entry_embeddings_hnsw ON entry_embeddings "
         "USING hnsw (embedding vector_cosine_ops)"
@@ -52,5 +49,4 @@ def downgrade() -> None:
     if op.get_bind().dialect.name != "postgresql":
         return
     op.execute("DROP TABLE IF EXISTS entry_embeddings")
-    # Leave the `vector` extension in place — other objects may depend on it and
-    # dropping an extension another migration created isn't this revision's call.
+    # Leave the `vector` extension in place — other objects may depend on it.

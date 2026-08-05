@@ -1,14 +1,12 @@
 """Alembic migration guards.
 
-`test_migration_schema_matches_models` is the drift guard: it builds the schema
-two ways — by running the migrations, and from SQLModel's metadata — and asserts
-they declare the same tables and columns. It fails when a model gains/loses a
-column (or table) without a matching migration.
+`test_migration_schema_matches_models` is the drift guard: builds the schema
+two ways (migrations vs SQLModel metadata) and asserts they agree on
+tables/columns, catching a model change with no matching migration.
 
 `test_postgres_upgrade_downgrade_roundtrips` exercises the real Postgres path
-(constraint enforcement, downgrade) but only when a Postgres URL is provided via
-TEST_DATABASE_URL — skipped otherwise, so the SQLite unit suite stays green with
-no external DB.
+(constraints, downgrade) when TEST_DATABASE_URL is set; skipped otherwise so
+the SQLite suite stays green with no external DB.
 """
 import os
 from pathlib import Path

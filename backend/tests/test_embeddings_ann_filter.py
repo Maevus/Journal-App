@@ -1,21 +1,15 @@
 """ANN recall when the vector index is crowded by other users' entries.
 
-Gated on TEST_DATABASE_URL like the other pgvector suites — SQLite has no ANN
-index at all, so this behaviour is inexpressible off Postgres.
+Postgres-only (gated on TEST_DATABASE_URL) — SQLite has no ANN index.
 
-The failure these tests exist for is invisible in ordinary use. `search_similar`
-filters `WHERE user_id`, but the HNSW index covers `embedding` alone, so an index
-scan walks the *globally* nearest vectors and the owner filter is applied to
-whatever came back. While the table is small the planner sorts a btree scan
-instead and everything works; once it grows enough to prefer the ANN plan, a user
-whose entries fall outside the global candidate set gets an empty result — and an
-empty result is indistinguishable from "nothing matched". No error, no log, no
-symptom until someone says search stopped finding things.
+The bug this guards: `search_similar` filters `WHERE user_id`, but the HNSW
+index covers `embedding` alone, so a crowded ANN scan can return only other
+users' nearest vectors — an empty result indistinguishable from "nothing
+matched". Small tables mask it (planner prefers a btree scan); it surfaces
+once the table is large enough that the planner prefers the ANN plan.
 
-These tests force the ANN plan rather than waiting for the table to grow into it:
-`enable_sort=off` leaves the ordered index scan as the only way to satisfy the
-ORDER BY, and a small `hnsw.ef_search` makes the candidate set small enough to
-reason about. That is the shape production takes as the corpus grows.
+Tests force that plan at 200 rows via `enable_sort=off` + a small
+`hnsw.ef_search`, reproducing what production does organically at scale.
 """
 import os
 from pathlib import Path
@@ -41,9 +35,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 _DIMS = 384
-# Two poles of the space. Every user-1 entry sits on `NEAR`, so it owns the whole
-# neighbourhood around the query; user 2's entries sit on `FAR`, unreachable
-# unless the scan keeps going past the first candidates it finds.
+# Two poles: user 1's entries sit on NEAR (owns the query neighbourhood);
+# user 2's sit on FAR, unreachable unless the scan looks past first candidates.
 _NEAR = [1.0] + [0.0] * (_DIMS - 1)
 _FAR = [0.0] * (_DIMS - 1) + [1.0]
 
@@ -57,13 +50,8 @@ def _alembic_config(url: str) -> Config:
 
 @pytest.fixture
 def pg_ann(monkeypatch):
-    """Schema on a real Postgres, with every connection pinned to the ANN plan.
-
-    `enable_sort=off` removes the sort-a-btree-scan alternative, so the planner
-    must use the HNSW index to satisfy the ORDER BY; `hnsw.ef_search=10` keeps
-    the candidate set small. Together they reproduce, at 200 rows, what the
-    planner chooses on its own once the table is large.
-    """
+    """Schema on Postgres, connections pinned to force the ANN plan (see module
+    docstring) at just 200 rows."""
     url = require_test_database_url()
     cfg = _alembic_config(url)
     command.downgrade(cfg, "base")
@@ -83,12 +71,8 @@ def pg_ann(monkeypatch):
 
 
 def _seed(engine, *, entry_id: int, user_id: int, vec: list[float]) -> None:
-    """Insert an entry and its vector directly.
-
-    Deliberately bypasses fastembed: these tests are about index geometry, not
-    embedding quality, and a hand-placed vector is the only way to say "this
-    user's entries are nowhere near the query" precisely.
-    """
+    """Insert an entry and its vector directly, bypassing fastembed — these
+    tests are about index geometry, not embedding quality."""
     with Session(engine) as s:
         s.add(JournalEntry(
             id=entry_id, user_id=user_id, source="text",
@@ -106,13 +90,9 @@ def _seed(engine, *, entry_id: int, user_id: int, vec: list[float]) -> None:
 
 
 def test_a_crowded_index_still_returns_your_own_entries(pg_ann, monkeypatch):
-    """The finding: one user's entries filling the candidate set must not make
-    another user's search come back empty.
-
-    200 entries for user 1 sit on top of the query; user 2's five sit at the
-    opposite pole. Every candidate the ANN scan reaches first belongs to user 1,
-    so a scan that stops there leaves user 2 with nothing — despite user 2 having
-    five perfectly findable entries and asking only for five.
+    """One user's entries filling the candidate set must not leave another
+    user's search empty — 200 of user 1's entries sit on the query; user 2's
+    five sit at the opposite pole and must still come back.
     """
     monkeypatch.setattr(emb, "_embed", lambda _content: _NEAR)
 
@@ -123,9 +103,8 @@ def test_a_crowded_index_still_returns_your_own_entries(pg_ann, monkeypatch):
 
     results = emb.search_similar("anything", limit=5, user_id=2)
 
-    # Compared as a set: these five vectors are identical, so their distances
-    # tie and no order among them is more correct than another. Ranking is
-    # pinned by test_results_stay_in_distance_order, which spreads them out.
+    # Compared as a set: identical vectors tie on distance, so no order among
+    # them is "more correct". Ranking itself is pinned by the next test.
     assert {entry_id for entry_id, _ in results} == {201, 202, 203, 204, 205}
 
 
@@ -146,9 +125,8 @@ def test_the_crowding_user_is_unaffected(pg_ann, monkeypatch):
 
 
 def test_results_stay_in_distance_order(pg_ann, monkeypatch):
-    """Recall is not worth much if the ranking is wrong. `search_similar`
-    promises most-similar-first, and the fix must not relax that into
-    approximately-ordered — hybrid_search fuses on these scores.
+    """`search_similar` promises most-similar-first; the fix must not relax
+    that to approximately-ordered — hybrid_search fuses on these scores.
     """
     monkeypatch.setattr(emb, "_embed", lambda _content: _NEAR)
 

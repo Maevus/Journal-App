@@ -1,10 +1,8 @@
 """Slice F1: every LLM call persists one attributed LLMUsage row.
 
-The meter lives in llm_client._log_usage — the one place both LLM entry points
-already funnel through — so an unmetered call is structurally impossible (the
-spend-side twin of the user_entries read choke point). The Anthropic SDK is
-faked (no API calls); meter writes land in the in-memory `meter_db` engine
-from conftest.
+The meter lives in llm_client._log_usage, the one place both LLM entry points
+funnel through, so an unmetered call is structurally impossible. The Anthropic
+SDK is faked; meter writes land in the in-memory `meter_db` engine from conftest.
 """
 from types import SimpleNamespace
 
@@ -79,10 +77,10 @@ async def test_stream_text_persists_an_attributed_usage_row(monkeypatch, meter_d
 
 
 async def test_aborted_stream_is_still_metered(monkeypatch, meter_db):
-    """A client that hangs up mid-stream unwinds the generator at `yield`, so
+    """Hanging up mid-stream unwinds the generator at `yield`, so
     `get_final_message()` never runs. Metering only on that path would record $0
-    for a call Anthropic has already billed — making DEMO_DAILY_USD and
-    GLOBAL_DAILY_USD bypassable by reading one frame and disconnecting, on repeat.
+    for a call Anthropic already billed — bypassing the daily caps by reading
+    one frame and disconnecting, on repeat.
     """
     _fake_streaming_client(monkeypatch)
 
@@ -114,10 +112,8 @@ async def test_repeated_aborts_each_record_spend(monkeypatch, meter_db):
 async def test_structured_output_persists_a_system_row(monkeypatch, meter_db):
     _fake_tool_client(monkeypatch)
 
-    # System work (user_id=None) that still happens must name its model: with no
-    # owner there's no per-user model to resolve, so an implicit-model system
-    # call refuses instead (F3 — see test_resolve_model_refuses_unowned_system_work).
-    # An explicit-model system call still meters visibly, charged to no quota.
+    # System work (user_id=None) must name its model explicitly: no owner means
+    # no per-user model to resolve, so an implicit-model system call refuses (F3).
     await llm.structured_output(prompt="p", output_schema=_Out, model="claude-haiku-4-5", user_id=None)
 
     [row] = _rows(meter_db)
@@ -136,10 +132,9 @@ async def test_meter_failure_never_kills_the_call(monkeypatch, meter_db):
     the SSE mid-flight. (Quota and BYO-key resolution, in F2/F4, fail closed —
     but they run BEFORE the call, so nothing is lost by the meter's leniency.)"""
     _fake_streaming_client(monkeypatch)
-    # Model + key resolution are separate pre-call DB reads; sidestep both (an
-    # explicit model skips resolve_model, and this stub skips resolve_api_key's
-    # lookup) so the boom below targets only the meter, which is this test's
-    # subject. Those pre-call reads fail closed on their own; the meter fails open.
+    # Model + key resolution are separate pre-call reads; sidestep both (explicit
+    # model skips resolve_model; stub skips resolve_api_key) so the boom below
+    # targets only the meter — the pre-call reads fail closed on their own.
     monkeypatch.setattr(llm, "resolve_api_key", lambda **k: None)
 
     def boom(*a, **k):

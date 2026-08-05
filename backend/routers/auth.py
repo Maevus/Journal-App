@@ -1,21 +1,10 @@
-"""Sign in with Google — the HTTP surface of the auth layer (ADR 0003).
+"""Google Sign-In (ADR 0003): Authorization Code flow via Authlib.
 
-Authorization Code flow, two round-trips through the browser, delegated to
-Authlib:
-
-  GET /auth/login    → redirect out to Google carrying our client_id and a
-                       random `state`. Authlib stashes `state` in the signed
-                       SessionMiddleware cookie so the callback can verify the
-                       response really answers OUR request (CSRF protection).
-  GET /auth/callback → Google redirects back with a one-time `code`; Authlib
-                       exchanges it server-side and verifies the id_token
-                       signature against Google's published keys. From there
-                       our own pieces take over: get_or_create_user →
-                       create_session → httpOnly cookie → redirect to the SPA.
-
-The SessionMiddleware cookie is scaffolding for the in-flight handshake only.
-Logged-in identity lives in the `sessions` table behind the httpOnly cookie
-(services/auth.py) — never in a client-side session.
+/auth/login redirects to Google with a `state` stashed in the signed
+SessionMiddleware cookie (CSRF protection); /auth/callback verifies it,
+exchanges the code, and checks the id_token signature. That cookie is only
+handshake scaffolding — real identity lives in the `sessions` table behind
+the httpOnly cookie (services/auth.py).
 """
 import logging
 from typing import Optional
@@ -43,11 +32,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# Both legs of the handshake are throttled, per IP rather than per session — the
-# whole point of logging in is that the caller hasn't got a session yet, so
-# there is nothing else to key on. Throttling only the callback would leave the
-# outbound leg as a free redirect amplifier, and the callback alone is the
-# guessing surface for a stolen `code` (security checklist §5).
+# Both legs throttled per IP — no session exists yet to key on. Limiting only
+# the callback would leave login as a free redirect amplifier and the
+# callback as an unbounded guessing surface for a stolen `code` (security
+# checklist §5).
 _LOGIN_RATE_LIMIT = Depends(rate_limit(TIER_AUTH, by_ip_only=True))
 
 oauth = OAuth()
@@ -55,11 +43,9 @@ oauth.register(
     "google",
     client_id=config.GOOGLE_OAUTH_CLIENT_ID,
     client_secret=config.GOOGLE_OAUTH_CLIENT_SECRET,
-    # Google's discovery document supplies the authorize/token/keys endpoints,
-    # so none of them are hardcoded here.
+    # Google's discovery document supplies the authorize/token/keys endpoints.
     server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-    # `openid email` is everything identity needs: `sub` + `email`. No wider
-    # profile scope — ask for the minimum and the consent screen stays boring.
+    # Minimal scope: `sub` + `email` is all identity needs.
     client_kwargs={"scope": "openid email"},
 )
 
@@ -77,12 +63,10 @@ async def callback(request: Request, db: Session = Depends(get_session)):
     try:
         token = await oauth.google.authorize_access_token(request)
     except OAuthError as exc:
-        # Denied consent, stale/mismatched state, … — send the user back to
-        # the app with a flag it can surface, rather than a bare error page.
-        # Log why: a swallowed OAuth failure is otherwise invisible. error +
-        # description name the failure mode (mismatching_state / access_denied /
-        # invalid_grant …); the cookie flag distinguishes "state lost" from
-        # "state present but rejected".
+        # Consent denied / stale state / etc: redirect back with a flag instead
+        # of a bare error page. Log error+description (failure mode) and
+        # whether the state cookie survived, since a swallowed OAuth failure
+        # is otherwise invisible.
         logger.warning(
             "OAuth callback failed: error=%r description=%r has_oauth_state_cookie=%s",
             getattr(exc, "error", None),
@@ -111,10 +95,9 @@ async def callback(request: Request, db: Session = Depends(get_session)):
 def me(user: User = Depends(get_current_user)):
     """Who am I? The SPA calls this on load to decide login state.
 
-    `demo` rides along so the SPA knows this is the shared demo account (a
-    signed-out visitor under PUBLIC_DEMO, or anyone under APP_MODE=demo) — it hides
-    key management and shows the "sign in to start your own" CTA. Now a per-user
-    fact, since one instance serves both the demo visitor and real logged-in users.
+    `demo` flags the shared demo account (signed-out under PUBLIC_DEMO, or
+    APP_MODE=demo) so the SPA hides key management and offers "sign in to
+    start your own".
     """
     return {"id": user.id, "email": user.email, "demo": is_demo_user(user)}
 

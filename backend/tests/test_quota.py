@@ -1,12 +1,11 @@
 """Quota-before-call (freemium F2, ADR 0003).
 
-check_quota is the money gate: it runs BEFORE an LLM call and fails closed —
-the deliberate asymmetry with _log_usage, which runs after and never kills the
-call it's metering. These tests exercise the public interface only:
-check_quota(user_id=...) either returns or raises QuotaExceededError.
+check_quota runs BEFORE an LLM call and fails closed — the deliberate asymmetry
+with _log_usage, which runs after and never kills the call it's metering. Tests
+exercise the public interface only: it returns or raises QuotaExceededError.
 
-Spend rows are seeded through the same in-memory meter DB the autouse
-`meter_db` fixture gives llm_client, so the tests never touch journal.db.
+Spend rows are seeded through the meter DB the autouse `meter_db` fixture gives
+llm_client, so tests never touch journal.db.
 """
 import threading
 from datetime import timedelta
@@ -45,10 +44,9 @@ def _give_key(engine, *, user_id):
 
 @pytest.fixture
 def budget(monkeypatch):
-    """Give the free tier a nonzero budget for the tests about quota *math*
-    (the default $0 refuses everything before the math matters). Also pins the
-    global cap — roomy unless a test is about the cap itself — so per-user
-    tests can't trip it by accident."""
+    """Nonzero free-tier budget for tests about quota *math* (default $0 refuses
+    before the math matters); also pins a roomy global cap so per-user tests
+    can't trip it by accident."""
     def _set(usd, global_usd=100.0):
         monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", usd)
         monkeypatch.setattr(config, "GLOBAL_DAILY_USD", global_usd)
@@ -57,9 +55,8 @@ def budget(monkeypatch):
 
 
 def test_zero_budget_refuses_even_with_zero_spend(meter_db, budget):
-    """The launch posture: keyless users have a $0 budget (the shipped config
-    default), so the gate must refuse at zero spend — spent >= budget, not >.
-    A `>` comparison would wave every $0-budget user through."""
+    """Keyless users ship with a $0 budget, so the gate must refuse at zero
+    spend: spent >= budget, not >, or every $0-budget user would pass."""
     budget(0.0)
     with pytest.raises(QuotaExceededError):
         check_quota(user_id=1)
@@ -100,18 +97,17 @@ def test_other_users_spend_does_not_count(meter_db, budget):
 
 
 def test_system_work_is_exempt_from_per_user_budget(meter_db, budget):
-    """user_id=None is system work (the user-less startup-sync mood scoring):
-    metered for visibility, charged to nobody's quota. It must pass even with
-    a $0 per-user budget — only the global cap can stop it."""
+    """user_id=None is system work (startup-sync mood scoring): metered for
+    visibility but charged to nobody's quota, so only the global cap can stop it."""
     budget(0.0)
     _spend(meter_db, user_id=None, cost=0.10)
     check_quota(user_id=None)  # must not raise
 
 
 def test_global_cap_trumps_per_user_headroom(meter_db, budget, monkeypatch):
-    """The kill-switch: once everyone's spend today reaches the global cap, a
-    user with personal budget left is still refused — the cap protects our key,
-    not their allowance. System (None) rows count toward it; yesterday's don't."""
+    """The kill-switch: once today's total spend hits the global cap, a user with
+    personal budget left is still refused — it protects our key, not their
+    allowance. System (None) rows count toward it; yesterday's don't."""
     budget(10.0)
     monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 5.0)
     _spend(meter_db, user_id=2, cost=99.0, created_at=_UTC_MIDNIGHT - timedelta(seconds=1))
@@ -130,10 +126,9 @@ def test_global_cap_stops_system_work_too(meter_db, monkeypatch):
 
 
 def test_demo_user_gets_the_demo_budget_not_the_free_tier(meter_db, monkeypatch):
-    """The seeded demo user is keyless — under the $0 free tier the whole showcase
-    would refuse (chat always, synthesis on any cache miss). It gets its own small
-    env-tunable budget instead. Per-user now: a real keyless user in the SAME DB
-    stays on the (here $0) free tier, so the two don't share a budget."""
+    """The demo user is keyless, so under the $0 free tier the whole showcase
+    would refuse; it gets its own small env-tunable budget instead. A real
+    keyless user in the same DB stays on the free tier — the two don't share one."""
     from models.user import User
     from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB
 
@@ -163,9 +158,9 @@ def test_demo_user_gets_the_demo_budget_not_the_free_tier(meter_db, monkeypatch)
 
 
 def test_own_key_user_is_exempt_from_all_caps(meter_db, budget):
-    """A BYO user spends their own money on their own key — neither the free-tier
-    budget nor the global cap applies (both protect OUR key, not their wallet).
-    They pass even at a $0 free tier with spend far past the global cap."""
+    """A BYO user spends their own key, so neither the free-tier budget nor the
+    global cap applies (both protect OUR key, not their wallet) — even at $0
+    free tier with spend past the global cap."""
     budget(0.0, global_usd=5.0)
     _spend(meter_db, user_id=1, cost=99.0)
     _give_key(meter_db, user_id=1)
@@ -173,9 +168,8 @@ def test_own_key_user_is_exempt_from_all_caps(meter_db, budget):
 
 
 def test_byo_spend_does_not_trip_global_cap_for_others(meter_db, budget):
-    """The load-bearing F4c behavior: a BYO user's own-key spend must not refuse
-    everyone else. It isn't on our key, so it's excluded from the global sum —
-    free-tier users and system work still pass despite a huge BYO spend."""
+    """F4c: a BYO user's own-key spend isn't on our key, so it's excluded from
+    the global sum — free-tier users and system work still pass despite it."""
     budget(10.0, global_usd=5.0)
     _give_key(meter_db, user_id=2)
     _spend(meter_db, user_id=2, cost=99.0)  # BYO user, own key
@@ -185,11 +179,9 @@ def test_byo_spend_does_not_trip_global_cap_for_others(meter_db, budget):
 
 
 def test_fails_closed_when_the_check_itself_breaks(budget, monkeypatch):
-    """The asymmetry with the meter: _log_usage never kills the call it's
-    metering (money already spent); the gate refuses when it can't verify
-    (money not spent yet). A broken check must surface as the same
-    QuotaExceededError callers already handle — not a raw DB error, and
-    never a free pass."""
+    """The asymmetry with the meter: _log_usage never kills a call (money already
+    spent); the gate refuses when it can't verify (money not spent yet). A broken
+    check must surface as QuotaExceededError, not a raw DB error or a free pass."""
     import services.quota as quota
     from sqlmodel import create_engine
 
@@ -200,12 +192,10 @@ def test_fails_closed_when_the_check_itself_breaks(budget, monkeypatch):
 
 
 def test_releasing_a_reservation_returns_the_unspent_headroom(meter_db, budget):
-    """A reservation is the call's worst case, so it must not outlive the call.
-
-    The gate has to commit to a number before the tokens exist, and it commits
-    high. Once the meter holds what the call really cost, the difference has to
-    go back — otherwise a $1 reservation settled by a $0.01 call locks up the
-    budget it over-claimed until the TTL expires it.
+    """A reservation is the call's worst-case cost and must not outlive the call:
+    the gate commits high before tokens exist, so once the meter holds the real
+    cost the difference must go back — otherwise a $1 reservation settled by a
+    $0.01 call locks up the over-claimed budget until the TTL expires it.
     """
     budget(1.0)
     reservation = check_quota(user_id=1, estimated_cost=1.0)
@@ -213,8 +203,7 @@ def test_releasing_a_reservation_returns_the_unspent_headroom(meter_db, budget):
     with pytest.raises(QuotaExceededError):
         check_quota(user_id=1, estimated_cost=1.0)  # the whole budget is claimed
 
-    # The call ended and cost a cent — the meter now holds the truth, so the
-    # claim is redundant.
+    # The call cost a cent; the meter now holds the truth, so the reservation is redundant.
     _spend(meter_db, user_id=1, cost=0.01)
     release_reservation(reservation)
 
@@ -222,10 +211,9 @@ def test_releasing_a_reservation_returns_the_unspent_headroom(meter_db, budget):
 
 
 def test_a_stranded_reservation_stops_counting_after_the_ttl(meter_db, budget):
-    """A worker killed mid-call never releases its claim, and nothing else can
-    tell that from a call still running. Without an expiry those rows would
-    accumulate until the budget was permanently unusable — so the sums ignore
-    anything older than RESERVATION_TTL, and a crash costs at most that long.
+    """A worker killed mid-call never releases its claim, indistinguishable from
+    a call still running. Sums ignore anything older than RESERVATION_TTL, so a
+    crash costs at most that long instead of permanently locking the budget.
     """
     budget(1.0)
     check_quota(user_id=1, estimated_cost=1.0)
@@ -246,10 +234,9 @@ def test_a_stranded_reservation_stops_counting_after_the_ttl(meter_db, budget):
 def concurrent_meter_db(monkeypatch, tmp_path):
     """A meter DB the gate can be raced against.
 
-    `meter_db` hands every session ONE connection (StaticPool on `sqlite://`),
-    which 20 threads hammering it segfaults — and a single shared connection
-    can't reproduce the contention the gate has to survive anyway. File-backed
-    SQLite gives each thread a real connection, the shape production has.
+    `meter_db`'s single shared connection (StaticPool on `sqlite://`) segfaults
+    under 20 threads and can't reproduce real contention anyway; file-backed
+    SQLite gives each thread its own connection, the shape production has.
     """
     import services.quota as quota
 
@@ -261,12 +248,10 @@ def concurrent_meter_db(monkeypatch, tmp_path):
 
 
 def test_concurrent_checks_cannot_all_pass_one_budget(concurrent_meter_db, budget):
-    """The gate must reserve headroom, not just read it.
-
-    Every checker sums spend that only exists once a call has *finished*, so N
-    callers arriving together all see the same empty meter and all pass — the
-    budget bounds nothing under concurrency. Firing 20 checks at a $1 budget,
-    each declaring it may cost the whole $1, must admit exactly one.
+    """The gate must reserve headroom, not just read spend that only exists once
+    a call finishes — otherwise N callers arriving together all see an empty
+    meter and all pass. 20 checks against a $1 budget, each claiming the whole
+    $1, must admit exactly one.
     """
     budget(1.0)
     admitted = []

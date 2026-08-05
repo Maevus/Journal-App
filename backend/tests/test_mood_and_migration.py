@@ -1,7 +1,6 @@
 """Tests for the mood-scoring write-back.
 
-(Schema migration is now Alembic's — see test_migrations.py. The old
-ensure_schema() SQLite shim it used to test was removed at the Postgres move.)
+Schema migration itself is Alembic's — see test_migrations.py.
 """
 import pytest
 from sqlalchemy.pool import StaticPool
@@ -70,9 +69,9 @@ async def test_score_mood_swallows_errors(mood_engine, monkeypatch):
 async def test_score_mood_skips_unowned_rows_without_calling_llm(
     mood_engine, monkeypatch, caplog
 ):
-    """An unowned row (user_id=None) has no owner to bill, so mood scoring must
-    not run at all (F3): the LLM is never called, the entry stays unscored, and
-    the skip is INFO — an intentional decision, not a failure."""
+    """An unowned row has no owner to bill, so mood scoring must not run at
+    all (F3): the LLM is never called, and the skip logs at INFO, not as a
+    failure."""
     eid = _make_entry(mood_engine)
     called = False
 
@@ -94,10 +93,8 @@ async def test_score_mood_skips_unowned_rows_without_calling_llm(
 async def test_score_mood_quota_skip_is_logged_as_skip_not_failure(
     mood_engine, monkeypatch, caplog
 ):
-    """A quota refusal is expected behavior (F2), not an error: the entry stays
-    unscored, nothing raises, and the log says 'quota' at INFO — distinct from
-    the 'failed' warning — so a day of quota-skipped scorings is visible for
-    what it is."""
+    """A quota refusal is expected (F2), not an error: nothing raises, and the
+    log says 'quota' at INFO, distinct from a 'failed' WARNING."""
     from services.quota import QuotaExceededError
 
     eid = _make_entry(mood_engine)

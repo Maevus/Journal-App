@@ -1,25 +1,19 @@
-"""
-Run one GoodNotes folder scan now, without going through the HTTP route.
+"""Run one GoodNotes folder scan now, without going through the HTTP route.
 
-Same work as the scheduled scan in `main._scheduled_goodnotes_scan`: OCR the
-pages of the exported PDF that aren't in the DB yet, ingest them, then mood-score
-what landed. Going direct rather than via POST /ingest?source=goodnotes skips the
-session-cookie auth and the ingest rate limit (5/min), neither of which means
-anything for an operator-run backfill.
+OCRs pages of the exported PDF not yet in the DB, ingests them, then mood-scores
+what landed — same work as `main._scheduled_goodnotes_scan`. Skips session-cookie
+auth and the ingest rate limit (5/min); fine for an operator-run backfill.
 
 Usage (from backend/):
 
     .venv/bin/python scripts/ingest_goodnotes_once.py
     .venv/bin/python scripts/ingest_goodnotes_once.py --force   # re-OCR every page
 
-Costs one Claude-vision call per *new* page plus one scoring call per ingested
-entry, billed to the connector's owner (GOOGLE_EMAIL's user). Already-ingested
-pages are skipped before any paid call, so re-running is cheap — with one
-exception: pages that OCR'd blank record no row, so they are re-transcribed on
-every run.
+One Claude-vision call per new page plus one scoring call per entry, billed to
+GOOGLE_EMAIL's user. Already-ingested pages are skipped cheaply — except pages
+that OCR'd blank, which record no row and are re-transcribed every run.
 
-`--force` re-OCRs the whole PDF. On a year-long notebook that is the entire
-backup at full price; it exists for repairing bad transcriptions, not routine use.
+`--force` re-OCRs the whole PDF at full price; use only to repair bad transcriptions.
 """
 import asyncio
 import os
@@ -36,8 +30,8 @@ load_dotenv()
 
 from sqlmodel import Session  # noqa: E402
 
-# Register every table in the shared metadata, as main.py does — otherwise
-# JournalEntry.user_id's foreign key to `users` can't be resolved at commit time.
+# Register every table in the shared metadata (like main.py) — otherwise the
+# FK from JournalEntry.user_id to `users` can't resolve at commit time.
 import models.journal  # noqa: F401, E402
 import models.user  # noqa: F401, E402
 import models.keys  # noqa: F401, E402

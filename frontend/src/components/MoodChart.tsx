@@ -27,8 +27,7 @@ interface MoodChartProps {
 
 export function MoodChart({ range, source }: MoodChartProps) {
   // A custom [from, to] window (both set) overrides the preset `range`
-  // server-side. Picking a preset clears it — App remounts this component with
-  // key={range.days}, resetting the window without a set-state-in-effect.
+  // server-side. Picking a preset remounts this component (key={range.days}), clearing the window.
   const [customStart, setCustomStart] = useState<string | null>(null)
   const [customEnd, setCustomEnd] = useState<string | null>(null)
 

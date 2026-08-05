@@ -206,9 +206,8 @@ def test_resolve_model_free_tier_is_haiku():
 
 
 def test_resolve_model_demo_user_is_premium(meter_db):
-    """The demo user runs the showcase on the premium model, bounded by the demo
-    budget — the whole point of the separate DEMO_MODEL knob. Per-user now: it's
-    the demo *account*, not a global mode, that picks the model."""
+    """The demo account runs on the premium model, bounded by the demo budget —
+    the point of the DEMO_MODEL knob is per-account, not a global mode."""
     from models.user import User
     from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB
 
@@ -346,15 +345,12 @@ async def test_stream_text_refuses_over_budget_before_any_api_call(monkeypatch):
 
 
 async def test_a_call_in_flight_is_visible_to_the_next_checker(monkeypatch, meter_db):
-    """The gate can only bound a burst if the entry points declare what a call
-    might cost BEFORE making it.
-
-    A call is metered when it ends, so mid-stream the meter is still empty and
-    a second caller checking right then sees a budget nothing has touched. That
-    is the window 20 concurrent calls used to spend $11 against a $1 budget.
-    Asserted from inside the stream, where the meter genuinely shows nothing:
-    free tier is haiku at $5/1M out, so a 100k-token ceiling is a $0.50 worst
-    case — exactly the budget, so the second check must be refused.
+    """The gate bounds a burst only if callers declare worst-case cost BEFORE
+    the call — a call is metered only when it ends, so mid-stream a
+    concurrent checker sees an untouched budget (the gap that once let 20
+    concurrent calls spend $11 against a $1 budget). Sized so free tier's
+    $0.50 worst case exactly equals the budget, so the mid-stream check must
+    refuse.
     """
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 0.50)
     monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
@@ -377,9 +373,9 @@ async def test_a_call_in_flight_is_visible_to_the_next_checker(monkeypatch, mete
 
 
 async def test_a_finished_call_releases_what_it_did_not_spend(monkeypatch, meter_db):
-    """The worst case is only charged for the life of the call. Once the stream
-    ends, the real cost is in the meter and the claim must be gone — otherwise
-    one 100k-ceiling call would hold $0.50 of a $1 budget for the whole TTL."""
+    """The worst-case claim is held only for the life of the call — once the
+    stream ends the real cost is metered and the claim must be gone, or one
+    100k-ceiling call would hold $0.50 of a $1 budget for the whole TTL."""
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 1.0)
     monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["a", "b"]))
@@ -393,10 +389,10 @@ async def test_a_finished_call_releases_what_it_did_not_spend(monkeypatch, meter
 
 
 async def test_an_aborted_stream_releases_its_reservation(monkeypatch, meter_db):
-    """The abort path is the one that already leaked money once (the $0-metering
-    bug). A client hanging up mid-stream unwinds the generator, so the release
-    has to ride the same `finally` the partial metering does — otherwise
-    abandoning calls silently locks the budget up for the whole TTL."""
+    """Regression guard for a real leak: a client hanging up mid-stream
+    unwinds the generator, so the reservation release must ride the same
+    `finally` as partial metering, or abandoned calls lock the budget for
+    the whole TTL."""
     monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 1.0)
     monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
     msgs = _FakeMessages(stream_cm=_FakeTextStream(["a", "b", "c"]))
@@ -436,9 +432,9 @@ async def test_structured_output_raises_after_exhausting_retries(monkeypatch):
 # --- pre-call lookup consolidation (post-F5 cleanup) ------------------------
 
 async def test_generation_reads_the_key_row_exactly_once(monkeypatch, meter_db):
-    """resolve_api_key is the single "does this user have a key" read per call;
-    resolve_model and check_quota reuse its answer instead of re-reading the
-    row (the consolidation flagged in the F4 handoff)."""
+    """resolve_api_key is the single "has a key" read per call; resolve_model
+    and check_quota reuse its answer instead of re-reading the row (F4
+    consolidation)."""
     reads = {"n": 0}
 
     def counting_get(session, *, user_id, provider="anthropic"):

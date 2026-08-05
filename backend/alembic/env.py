@@ -1,10 +1,8 @@
 """Alembic environment — wired to the app's own config and models.
 
-The URL comes from `config.DATABASE_URL` (the single knob the app already uses),
-not from alembic.ini, so `alembic` on the CLI and the programmatic upgrade in
-main.py both target whatever DB the app is pointed at. `target_metadata` is
-SQLModel's registry, populated by importing every model module below, so
-`--autogenerate` sees the full schema.
+URL comes from `config.DATABASE_URL`, not alembic.ini, so the CLI and
+main.py's programmatic upgrade both target the same DB. `target_metadata`
+is SQLModel's registry, populated by importing every model module below.
 """
 import sys
 from logging.config import fileConfig
@@ -14,8 +12,7 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
-# Make the app package importable when Alembic runs from backend/ (CLI) or via
-# a programmatic Config constructed in main.py.
+# Makes the app package importable whether Alembic runs via CLI or main.py.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from dotenv import load_dotenv  # noqa: E402
@@ -24,9 +21,8 @@ load_dotenv()
 
 import config as app_config  # noqa: E402
 
-# Import every model so its table registers on SQLModel.metadata before
-# autogenerate/compare runs. Importing the module is the whole point — the names
-# are unused here.
+# Registers each model's table on SQLModel.metadata before autogenerate
+# runs; importing the module is the whole point, the names are unused.
 import models.journal  # noqa: F401,E402
 import models.keys  # noqa: F401,E402
 import models.ocr  # noqa: F401,E402
@@ -35,26 +31,24 @@ import models.usage  # noqa: F401,E402
 import models.user  # noqa: F401,E402
 from sqlmodel import SQLModel  # noqa: E402
 
-# Alembic Config (from the ini on the CLI; empty when constructed programmatically).
-# Configure logging only when an ini file is actually present.
+# Config is from the ini on the CLI, empty when constructed programmatically.
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 target_metadata = SQLModel.metadata
 
-# URL resolution: an explicitly-provided url (a programmatic Config, or the ini)
-# wins; otherwise fall back to the app's own DB knob. This lets main.py's
-# programmatic upgrade and the CLI both hit config.DATABASE_URL, while tests can
-# point Alembic at a scratch DB by setting sqlalchemy.url on their Config.
+# Explicit url (programmatic Config or ini) wins; otherwise falls back to
+# the app's DB knob — lets tests point Alembic at a scratch DB via
+# sqlalchemy.url on their Config.
 _db_url = config.get_main_option("sqlalchemy.url") or app_config.DATABASE_URL
-# Alembic stores this in a ConfigParser, where % is interpolation syntax — a
-# URL-encoded password (postgres://u:p%40ss@…, which managed hosts generate
-# routinely) would raise ValueError here. Escape on write; get_main_option
-# un-escapes on read, so SQLAlchemy still receives the original URL.
+# ConfigParser treats % as interpolation syntax — a URL-encoded password
+# (%40 for @, common on managed hosts) would raise ValueError here. Escape
+# on write; get_main_option un-escapes on read, so SQLAlchemy gets the
+# original URL.
 config.set_main_option("sqlalchemy.url", _db_url.replace("%", "%%"))
 
-# Batch mode lets future ALTERs work on SQLite (demo/tests), which can't ALTER
+# Batch mode lets future ALTERs work on SQLite, which can't ALTER
 # constraints in place; harmless on Postgres.
 _render_as_batch = _db_url.startswith("sqlite")
 

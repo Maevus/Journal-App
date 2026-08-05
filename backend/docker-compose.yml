@@ -1,16 +1,14 @@
-# Local Postgres for development (ADR 0003 — the SQLite→Postgres move).
-# Not the production host: prod uses a managed Postgres chosen at deploy (todo #10).
-# The DATABASE_URL matching these creds is documented in .env.example.
+# Local Postgres for development. Not the production host — that's a managed
+# Postgres chosen at deploy. Matching DATABASE_URL is in .env.example.
 #
 #   docker compose up -d db      # start (pulls postgres:18 the first time)
 #   docker compose down          # stop, keep the data volume
 #   docker compose down -v       # stop and wipe the data volume
 services:
   db:
-    # Postgres 18 + pgvector (bundles pgvector 0.8.5). Pin the -trixie variant to
-    # match the base OS (glibc) the data volume was initialised on — the plain
-    # tag is bookworm, and mixing glibc collation versions on one volume warns and
-    # risks collation-sensitive index corruption.
+    # Postgres 18 + pgvector. Pin -trixie (glibc) to match the volume's
+    # base OS — mixing glibc collation versions on one volume risks
+    # collation-sensitive index corruption.
     image: pgvector/pgvector:pg18-trixie
     container_name: journal-postgres
     environment:
@@ -18,15 +16,12 @@ services:
       POSTGRES_PASSWORD: journal
       POSTGRES_DB: journal
     ports:
-      # Bind to loopback only. A bare "5432:5432" publishes on 0.0.0.0, which puts
-      # the journal and the BYO-key ciphertext on the LAN behind default creds —
-      # and POSTGRES_USER is the cluster superuser, so that also grants
-      # COPY … FROM PROGRAM. Nothing outside this machine needs the dev DB.
+      # Loopback only, deliberately: "5432:5432" would publish on 0.0.0.0 and
+      # expose the journal + BYO-key ciphertext to the LAN behind default creds.
       - "127.0.0.1:5432:5432"
     volumes:
-      # Postgres 18 moved the container VOLUME to /var/lib/postgresql (PGDATA now
-      # lives in a version subdir, /var/lib/postgresql/18/docker). Mounting the
-      # old /var/lib/postgresql/data would silently not persist. (docker-library docs)
+      # Postgres 18 moved the VOLUME to /var/lib/postgresql; mounting the old
+      # /var/lib/postgresql/data silently does not persist.
       - journal_pgdata:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U journal -d journal"]

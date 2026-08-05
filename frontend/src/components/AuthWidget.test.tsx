@@ -4,8 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { AuthWidget } from './AuthWidget'
 
-// Purely presentational since the login gate took over the logged-out state:
-// App owns useAuth and only renders the widget for a signed-in user.
+// Purely presentational: App owns useAuth and only renders this for a signed-in user.
 describe('AuthWidget', () => {
   it('shows the email and reports sign-out clicks', async () => {
     const onSignOut = vi.fn()

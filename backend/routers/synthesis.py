@@ -31,11 +31,9 @@ router = APIRouter()
 
 _PROMPT_PATH = Path(__file__).parent.parent / "prompts" / "synthesis_v1.yaml"
 
-# In-memory synthesis cache: an identical request reuses the generated text
-# instead of spending another LLM call. The key is the fully-rendered prompt,
-# which embeds the selected entries, range, and source — so any entry edit/add
-# or parameter change produces a different key and regenerates. Resets on
-# restart; bounded (LRU) so it can't grow without limit.
+# In-memory LRU cache keyed on the fully-rendered prompt (embeds entries,
+# range, source), so any edit/add or parameter change regenerates. Resets on
+# restart; bounded so it can't grow unbounded.
 _CACHE: "OrderedDict[str, str]" = OrderedDict()
 _CACHE_MAX = 32
 
@@ -47,9 +45,8 @@ def _load_prompt() -> dict:
 
 
 def _cache_key(user_id: int, model: str, max_tokens: int, system: str, user_prompt: str) -> str:
-    # user_id is in the key even though the rendered prompt already embeds the
-    # user's own entries: not-leaking across users should be a property of the
-    # key itself, not an accident of prompt contents.
+    # user_id is in the key too: not leaking across users should be a property
+    # of the key itself, not an accident of what the prompt happens to embed.
     version = _load_prompt().get("version", "?")
     raw = "\x00".join([str(version), str(user_id), model, str(max_tokens), system, user_prompt])
     return hashlib.sha256(raw.encode()).hexdigest()
@@ -87,43 +84,33 @@ async def synthesis(
 ):
     """Stream a synthesis of the user's entries as SSE.
 
-    POST, and deliberately so: as a GET this was a paid Opus call reachable by
-    cross-site navigation. The session cookie is `SameSite=Lax`, which the
-    browser *does* send on a top-level cross-site GET, and CORS never stops the
-    request being processed — only the response being read. So a third-party
-    page could burn a logged-in user's daily budget by pointing an iframe or a
-    link at this route, and a BYO-key user (quota-exempt by design, F4) would
-    have been spending on their own Anthropic key.
+    POST, deliberately: as a GET, this was a paid Opus call reachable by
+    cross-site navigation — `SameSite=Lax` still sends the session cookie on a
+    top-level GET, and CORS blocks reading the response but not processing the
+    request. A third-party page could burn a logged-in user's budget (or a
+    BYO-key user's own Anthropic spend) via an iframe or link.
 
-    A POST whose body is `application/json` is not a CORS "simple request": the
-    browser must preflight it, and the allow-list in `main.py` (config.FRONTEND_URL
-    only) refuses that preflight, so a cross-site caller never reaches this
-    handler. The scope moves into the body for the same reason — a form-encoded
-    POST would be simple, and simple means no preflight.
-
-    The rate limit below is the other half of the same finding: POST closes the
-    cross-site path, the limiter bounds what a legitimate caller can spend
-    through it.
+    A POST with a JSON body isn't a CORS "simple request", so the browser must
+    preflight it — main.py's allow-list (config.FRONTEND_URL only) refuses that
+    preflight, closing the cross-site path. The scope lives in the body for the
+    same reason: form-encoded would be a simple request. The rate limit below
+    is defense in depth on top of that.
     """
-    # Rate limit (services/rate_limit.py). A 200 carrying a named frame rather
-    # than a 429, because EventSource can't read a 4xx body — same shape as the
-    # quota refusal below. Checked before the entry query so a refused caller
-    # costs nothing.
+    # 200 with a named frame, not 429 — EventSource can't read a 4xx body (same
+    # shape as the quota refusal below). Checked first so a refused caller costs nothing.
     if limit_decision.refused:
         return rate_limited_stream(limit_decision)
 
     query = user_entries(user.id).order_by(JournalEntry.timestamp.asc())
     if body.days > 0:
-        # naive UTC to match JournalEntry.timestamp (stored naive); an aware
-        # datetime would break the >= comparison. See clock.utcnow_naive.
+        # naive UTC to match JournalEntry.timestamp (stored naive) — aware would break >=. See clock.utcnow_naive.
         cutoff = utcnow_naive() - timedelta(days=body.days)
         query = query.where(JournalEntry.timestamp >= cutoff)
     if body.source:
         query = query.where(JournalEntry.source == body.source)
     entries = list(session.exec(query).all())
 
-    # Sample evenly across the window so long ranges reflect the whole period
-    # rather than just the `limit` most recent entries.
+    # Sample evenly across the window so long ranges reflect the whole period, not just recent entries.
     if len(entries) > body.limit:
         step = len(entries) / body.limit
         entries = [entries[int(i * step)] for i in range(body.limit)]
@@ -143,9 +130,8 @@ async def synthesis(
         entries_text = "No journal entries found yet."
 
     user_prompt = cfg["user_template"].format(entries=entries_text)
-    # F3: the model is per-user now, not the prompt-YAML value. Resolve it here
-    # so it's both what we run and part of the cache key — a user's cached
-    # synthesis is keyed to the model that produced it.
+    # F3: model is per-user, not the prompt-YAML value. Resolved here so it's
+    # both what runs and part of the cache key.
     model = resolve_model(user_id=user.id)
     max_tokens = cfg.get("max_tokens", 1024)
     key = _cache_key(user.id, model, max_tokens, cfg["system"], user_prompt)
@@ -158,8 +144,7 @@ async def synthesis(
             yield "data: [DONE]\n\n"
             return
 
-        # Miss: stream from the LLM, accumulating tokens. Only cache once the
-        # stream completes — a mid-stream failure propagates and stores nothing.
+        # Miss: stream and accumulate; only cache once complete, so a mid-stream failure stores nothing.
         chunks: list[str] = []
         try:
             async for token in stream_text(
@@ -173,8 +158,7 @@ async def synthesis(
                 # JSON-encode each token so newlines in the payload are safe in SSE
                 yield f"data: {json.dumps(token)}\n\n"
         except QuotaExceededError as exc:
-            # Nothing is cached: the refusal is about today's budget, not
-            # this prompt's answer.
+            # Nothing is cached: the refusal is about today's budget, not this prompt's answer.
             yield sse_quota_frame(exc)
             yield "data: [DONE]\n\n"
             return

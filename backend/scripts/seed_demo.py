@@ -1,27 +1,20 @@
-"""
-Seed a self-contained demo database for showcasing the app.
+"""Seed a self-contained demo database for showcasing the app.
 
-Builds `demo_journal.db` (gitignored) with ~60 hand-crafted entries spanning the
-last ~6 months across all three sources, with mood scores that match each entry's
-tone — so the chart, source filter, day drill-down, and synthesis all have
-something real-looking to show. The personal `journal.db` is never touched.
+Builds ~60 hand-crafted entries spanning ~6 months across all three sources,
+mood scores matching each entry's tone, so chart/filter/drill-down/synthesis
+all have something real to show. Never touches the real `journal.db`.
 
-Note: semantic search is dormant on the SQLite demo — the vector store is
-pgvector (Postgres-only), so `embed_and_store` no-ops here. Search returns when
-the demo moves onto Postgres as a signed-out seed user.
-
-Timestamps are relative to "now", so the demo always looks fresh no matter
-when it is rebuilt. Keep external_ids are fake (`demo-keep-…`) — the
-"Open in Keep" links render but won't resolve.
+Semantic search is dormant here — the vector store is pgvector (Postgres-only),
+so `embed_and_store` no-ops on a SQLite target. Keep external_ids are fake
+(`demo-keep-…`); "Open in Keep" links render but won't resolve. Timestamps are
+relative to "now" so the demo always looks fresh.
 
 Usage (from backend/):
 
     .venv/bin/python scripts/seed_demo.py     # rebuilds demo db from scratch
-
     APP_MODE=demo uvicorn main:app            # serve the demo stack
 
-APP_MODE=demo derives the demo db and turns Keep sync off in one switch, so real
-Keep notes can never sync into the demo db. See backend/config.py.
+APP_MODE=demo also turns Keep sync off, so real notes can't sync into the demo db.
 """
 import os
 import sys
@@ -32,11 +25,9 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 os.chdir(BACKEND_DIR)
 sys.path.insert(0, str(BACKEND_DIR))
 
-# Seed into DATABASE_URL when set — the shared Postgres, where the demo is a
-# signed-out seed user (shape B) and its pgvector embeddings power real search.
-# With no DATABASE_URL, fall back to the SQLite demo db (APP_MODE=demo → a quick
-# no-Postgres demo, search dormant). Never the real journal.db by accident.
-# Set before importing config, which reads the env at import time.
+# DATABASE_URL set → seed the shared Postgres demo user (shape B, search works).
+# Unset → fall back to the SQLite demo db (APP_MODE=demo, search dormant).
+# Must be set before importing config, which reads the env at import time.
 if not os.getenv("DATABASE_URL"):
     os.environ["APP_MODE"] = "demo"
 
@@ -52,9 +43,8 @@ from services.auth import DEMO_EMAIL, DEMO_GOOGLE_SUB  # noqa: E402
 from services.embeddings import embed_and_store  # noqa: E402
 from services.ingestion import compute_hash  # noqa: E402
 
-# (days_ago, hour-of-day, source, mood_score, content)
-# Chronological arc: settling in → project crunch → burnout dip → recovery →
-# spring upswing → a wobble → strong stretch → flu week → rebound.
+# (days_ago, hour-of-day, source, mood_score, content) — arc: settling in →
+# crunch → burnout dip → recovery → upswing → wobble → strong stretch → flu → rebound.
 DEMO_ENTRIES: list[tuple[int, int, str, float, str]] = [
     (168, 21, "goodnotes", 0.62,
      "New notebook, fresh start. Moved my desk next to the window and the whole room "
@@ -258,8 +248,7 @@ DEMO_ENTRIES: list[tuple[int, int, str, float, str]] = [
 
 def _run_migrations() -> None:
     """Bring the target DB to head via Alembic — builds `entry_embeddings` on
-    Postgres (so demo search works) and is a no-op on an already-migrated DB.
-    Uniform across SQLite (fallback) and Postgres. env.py reads config.DATABASE_URL."""
+    Postgres (so demo search works); no-op if already at head."""
     from alembic import command
     from alembic.config import Config
 
@@ -271,10 +260,8 @@ def _run_migrations() -> None:
 def _wipe_demo_user(session: Session) -> None:
     """Idempotent reset — delete ONLY the demo user's rows, never anyone else's.
 
-    The demo now lives *in the shared DB* alongside real users, so the old
-    whole-file wipe is unsafe. Delete the demo user's owned rows first (FKs to
-    users block deleting the user otherwise); entry_embeddings cascades from
-    journalentry on Postgres. Then the user itself.
+    Deletes the demo user's owned rows first (FKs block deleting the user
+    otherwise); entry_embeddings cascades from journalentry on Postgres.
     """
     demo = session.exec(select(User).where(User.google_sub == DEMO_GOOGLE_SUB)).first()
     if demo is None:
