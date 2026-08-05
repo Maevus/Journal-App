@@ -218,16 +218,8 @@ app.include_router(usage.router, prefix="/usage", tags=["usage"])
 
 @app.get("/health", tags=["health"])
 def health(session: Session = Depends(get_session)):
-    """Container healthcheck. Unauthenticated and user-agnostic on purpose.
-
-    This used to be /trends, which later gained auth — the probe then failed on
-    every private deployment while the app was fine. A route that exists only to
-    be probed can't drift that way.
-
-    SELECT 1 so a reachable process with an unreachable database reports
-    unhealthy rather than green. No rate limiter: throttling the healthcheck
-    restarts the container under exactly the load it should survive.
-    """
+    """Container healthcheck. Unauthenticated. Runs SELECT 1, so it fails when
+    the database is unreachable. No rate limiter."""
     try:
         session.exec(select(1)).one()
     except Exception as exc:  # noqa: BLE001

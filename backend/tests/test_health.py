@@ -1,9 +1,5 @@
-"""The container healthcheck endpoint.
-
-It replaced /trends, which gained auth and then failed the probe on every
-private deployment while the app was fine. These tests pin the two properties
-that made it drift-prone: no auth, and a real database round-trip.
-"""
+"""The container healthcheck endpoint: no auth, real database round-trip, no
+rate limiter."""
 from sqlalchemy.exc import OperationalError
 
 import main
@@ -16,11 +12,7 @@ def test_health_needs_no_auth(client):
 
 
 def test_health_is_503_when_the_database_is_unreachable(client):
-    """Green must mean "process AND database", not "process".
-
-    A port check already proves the process is up; the probe only earns its
-    keep if it goes red when the DB is gone.
-    """
+    """Green must mean process AND database, not just process."""
     def dead_session():
         class _Dead:
             def exec(self, *a, **k):
@@ -38,7 +30,6 @@ def test_health_is_503_when_the_database_is_unreachable(client):
 
 
 def test_health_carries_no_rate_limiter():
-    """Throttling the healthcheck restarts the container under exactly the load
-    it is supposed to survive."""
+    """A throttled healthcheck restarts the container under load."""
     route = next(r for r in main.app.routes if getattr(r, "path", None) == "/health")
     assert route.dependencies == []

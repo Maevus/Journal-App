@@ -1,8 +1,7 @@
 """Tombstones for pages that OCR'd to nothing.
 
-A page with no text produces no JournalEntry, so `_page_already_imported` never
-sees it and the page is re-transcribed on every scan — a paid vision call per
-blank page, forever. The tombstone is the row that records "seen, empty".
+A blank page produces no JournalEntry, so without this row the scan re-OCRs it
+every time.
 """
 from datetime import datetime
 from typing import Optional
@@ -16,8 +15,7 @@ from clock import utcnow_naive
 class BlankPage(SQLModel, table=True):
     __tablename__ = "blank_pages"
 
-    # Keyed like the skip it replaces (source, external_id), not per-user: both
-    # share the single-account connector assumption in _resolve_sync_owner.
+    # Keyed (source, external_id), matching _page_already_imported.
     __table_args__ = (UniqueConstraint("source", "external_id", name="uq_blank_page"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)

@@ -88,6 +88,34 @@ The Edit tool never prompts regardless. Always prefer Edit first.
 - Make multiple small Edit calls rather than one complex Bash command
 - Never construct a Bash command to handle uncertainty — Read first, then Edit
 
+## Comments
+
+Comments say what the code does. Nothing else. Long comments get skipped, so a
+short one communicates more.
+
+```python
+# Good
+"""Container healthcheck. Unauthenticated. Runs SELECT 1, so it fails when
+the database is unreachable. No rate limiter."""
+
+# Bad — narrates history and reasoning nobody needs while reading the function
+"""Container healthcheck. Unauthenticated and user-agnostic on purpose.
+This used to be /trends, which later gained auth — the probe then failed on
+every private deployment while the app was fine. A route that exists only to
+be probed can't drift that way. …"""
+```
+
+Rules:
+- One or two lines. A paragraph means it belongs somewhere else.
+- No history ("this used to be…", "changed because…"). That is what `git log`
+  and the commit message are for.
+- No thought process, no justification of a decision already made.
+- Don't restate the code. `# increment i` is noise.
+- Design rationale that genuinely needs recording goes in `docs/adr/` or
+  `docs/decisions.md`, not inline.
+
+Same applies to docstrings and commit-message bodies.
+
 ## Architecture
 
 Full-stack personal journal analytics app: React SPA + FastAPI backend.

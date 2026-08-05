@@ -1,19 +1,14 @@
 """Shared test fixtures.
 
 Tests run against a throwaway in-memory SQLite DB and never touch the real
-Postgres or the pgvector store — `embed_and_store` (the vector-store write) is
-stubbed out for every test (and no-ops off Postgres anyway).
-
-The app itself is Postgres-only. Keeping the unit suite on in-memory SQLite is a
-deliberate trade: it needs no running server and no teardown. The cost is that
-Postgres-specific behaviour isn't exercised here, which is what the `*_pg.py`
-suites (gated on TEST_DATABASE_URL) are for.
+Postgres or the pgvector store. Postgres-specific behaviour is covered by the
+`*_pg.py` suites, gated on TEST_DATABASE_URL.
 """
 import os
 from urllib.parse import urlparse
 
-# config.py refuses to import without a Postgres DATABASE_URL. Tests replace the
-# engine wholesale, so this is only ever a string — nothing connects to it.
+# config.py requires a Postgres URL at import. Tests swap the engine; nothing
+# ever connects to this.
 os.environ.setdefault(
     "DATABASE_URL", "postgresql+psycopg://unused:unused@127.0.0.1:1/unused_by_tests"
 )
@@ -102,13 +97,7 @@ def session():
 
 @pytest.fixture(autouse=True)
 def _stub_embeddings(monkeypatch):
-    """No test may touch the pgvector store — stub both directions.
-
-    The read used to no-op by accident: `_on_postgres()` was False under the
-    SQLite DATABASE_URL, so search_similar returned []. Now that the URL is
-    always Postgres, an unstubbed search dials the placeholder host and hangs
-    the test on a refused connection. Stated outright instead of inferred.
-    """
+    """Stub both directions of the pgvector store; no test may touch it."""
     import services.retrieval as retrieval
 
     monkeypatch.setattr(ingestion, "embed_and_store", lambda *a, **k: None)

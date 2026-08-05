@@ -613,10 +613,7 @@ def _page_is_blank_tombstoned(session: Session, external_id: str) -> bool:
 
 
 def _record_blank_page(session: Session, external_id: str, *, user_id: Optional[int]) -> None:
-    """Tombstone a page that OCR'd empty, so it is never transcribed again.
-
-    Idempotent — `force=True` re-OCRs a tombstoned page and lands back here.
-    """
+    """Tombstone a page that OCR'd empty, so it is not transcribed again. Idempotent."""
     if _page_is_blank_tombstoned(session, external_id):
         return
     session.add(BlankPage(source="goodnotes", external_id=external_id, user_id=user_id))
@@ -659,12 +656,8 @@ async def ingest_goodnotes(
     folder = Path(os.path.expanduser(raw_path))
 
     if not folder.exists():
-        # A configured-but-absent path is an operator error, not an empty inbox,
-        # and the two used to be indistinguishable: this returned plain zeros, so
-        # a scan over a stale path logged exactly what "no new pages" logs. Google
-        # Drive renaming the export folder ("Notes" → "Notes (1)") stranded the
-        # connector for 7 weeks that way. ERROR + an explicit `error` key so the
-        # scheduled scan and a manual /ingest both say which it is.
+        # ERROR + an `error` key, so a stale path is distinguishable from a scan
+        # that found nothing new.
         logger.error(
             "GoodNotes path does not exist: %s — connector is ingesting NOTHING "
             "until GOODNOTES_PATH is corrected", folder,

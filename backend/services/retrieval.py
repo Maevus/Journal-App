@@ -34,26 +34,15 @@ logger = logging.getLogger(__name__)
 # dance), so search_similar itself returns only in-window hits.
 _WINDOWED_SEMANTIC_POOL = 100
 
-# BM25 matches tokens as exact strings, so corpus and query must be split the
-# same way. A bare `.split()` was doing that consistently but kept punctuation
-# attached: the entry "Frustrated, negative, grumpy." tokenised to `grumpy.`,
-# which is a different string from the query token `grumpy` — so the entry
-# scored 0.0 and ranked 241st for the word it is literally about. Any word
-# ending a sentence or preceding a comma was invisible to keyword search.
-#
-# `\w` is Unicode-aware, so accented words (the Spanish in these entries) stay
-# whole. Intra-word apostrophes are kept — "isn't" is one token, not "isn" +
-# "t" — in both the straight and curly forms, since transcribed handwriting
-# carries both.
+# Strips punctuation ("grumpy." and "grumpy" must be one token). `\w` is
+# Unicode-aware, so accented words stay whole; intra-word apostrophes are kept
+# in both the straight and curly forms.
 _TOKEN_RE = re.compile(r"\w+(?:['’]\w+)*")
 
 
 def _tokenize(text: str) -> list[str]:
-    """Lowercase and split into BM25 terms, discarding punctuation.
-
-    The single source of tokenisation for retrieval: corpus and query MUST go
-    through this same function or they silently stop matching.
-    """
+    """Lowercase and split into BM25 terms. Corpus and query must both go
+    through this or they stop matching."""
     return _TOKEN_RE.findall(text.lower())
 
 # A small, fast model is plenty for date extraction + follow-up condensation.
