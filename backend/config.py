@@ -1,20 +1,18 @@
 """
 Central runtime config.
 
-A single APP_MODE switch derives the database and Keep-sync defaults together, so
-they can't drift apart — the dangerous case being a demo DB selected while Keep
-sync is left on, which would pull real notes into the demo. One switch can't be
-half-set. (Embeddings live in Postgres via pgvector since the Chroma move, so
-there's no separate vector-store path to derive.)
+Postgres is the only database the app runs on. There is no SQLite fallback:
+running on two engines meant two journals, and they diverged — SQLite ended up
+holding 33 entries Postgres never saw while Postgres held 7 SQLite never saw.
+A missing DATABASE_URL is now an error rather than a silent second source of
+truth. (The test suite still uses its own throwaway in-memory SQLite; nothing
+persists there.)
 
-  APP_MODE=real  (default) → journal.db      + sync on
-  APP_MODE=demo            → demo_journal.db + sync off
+APP_MODE selects the demo user and Keep-sync default, not the database — both
+modes share one Postgres, and demo-ness is per-user (services/auth.py).
 
-Any individual var still wins when set explicitly, so every combination is
-still reachable:
-
-  APP_MODE=demo uvicorn main:app                       # whole demo stack
-  DATABASE_URL=sqlite:///./scratch.db uvicorn main:app # one override
+  APP_MODE=real  (default) → sync on
+  APP_MODE=demo            → sync off, requests resolve to the demo user
 """
 import os
 import secrets
@@ -28,13 +26,24 @@ if APP_MODE not in _MODES:
 
 IS_DEMO = APP_MODE == "demo"
 
-# Mode-derived defaults — an explicitly-set env var always overrides these.
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "sqlite:///./demo_journal.db" if IS_DEMO else "sqlite:///./journal.db",
-)
-# Embeddings live in Postgres (pgvector) since the Chroma→pgvector move — no
-# separate vector-store directory to configure.
+# Postgres or nothing. No default: a defaulted DATABASE_URL is how the app
+# quietly opened a second journal on disk. Tests set their own engine directly
+# and never import this path.
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is required and must be Postgres — e.g. "
+        "postgresql+psycopg://journal:journal@localhost:5432/journal. "
+        "Start one with `cd backend && docker compose up -d db`, or use "
+        "`scripts/dev.sh {real|demo}`, which sets it for you."
+    )
+if not DATABASE_URL.startswith(("postgresql", "postgres")):
+    raise RuntimeError(
+        f"DATABASE_URL must be Postgres, got {DATABASE_URL!r}. SQLite is no "
+        "longer supported: pgvector search, the quota advisory lock and the "
+        "rate-limit upsert all need Postgres, and two engines meant two journals."
+    )
+
 # Demo must never pull real Keep notes, so sync defaults off in demo mode.
 SYNC_ON_STARTUP = os.getenv(
     "SYNC_ON_STARTUP", "0" if IS_DEMO else "1"

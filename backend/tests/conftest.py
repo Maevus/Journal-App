@@ -1,17 +1,28 @@
 """Shared test fixtures.
 
-Tests run against an in-memory SQLite DB and never touch the real journal.db or
-the pgvector store — `embed_and_store` (the vector-store write) is stubbed out for
-every test (and no-ops off Postgres anyway).
+Tests run against a throwaway in-memory SQLite DB and never touch the real
+Postgres or the pgvector store — `embed_and_store` (the vector-store write) is
+stubbed out for every test (and no-ops off Postgres anyway).
+
+The app itself is Postgres-only. Keeping the unit suite on in-memory SQLite is a
+deliberate trade: it needs no running server and no teardown. The cost is that
+Postgres-specific behaviour isn't exercised here, which is what the `*_pg.py`
+suites (gated on TEST_DATABASE_URL) are for.
 """
 import os
 from urllib.parse import urlparse
 
-import pytest
-from sqlalchemy.pool import StaticPool
-from sqlmodel import Session, SQLModel, create_engine
+# config.py refuses to import without a Postgres DATABASE_URL. Tests replace the
+# engine wholesale, so this is only ever a string — nothing connects to it.
+os.environ.setdefault(
+    "DATABASE_URL", "postgresql+psycopg://unused:unused@127.0.0.1:1/unused_by_tests"
+)
 
-import services.ingestion as ingestion
+import pytest  # noqa: E402
+from sqlalchemy.pool import StaticPool  # noqa: E402
+from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
+
+import services.ingestion as ingestion  # noqa: E402
 from models.journal import JournalEntry
 from models.keys import UserApiKey  # noqa: F401 — registers the key table for create_all
 from models.rate_limit import RateLimitCounter  # noqa: F401 — registers the counter table
@@ -91,8 +102,17 @@ def session():
 
 @pytest.fixture(autouse=True)
 def _stub_embeddings(monkeypatch):
-    """ingest_entries writes to the vector store via embed_and_store; no-op it."""
+    """No test may touch the pgvector store — stub both directions.
+
+    The read used to no-op by accident: `_on_postgres()` was False under the
+    SQLite DATABASE_URL, so search_similar returned []. Now that the URL is
+    always Postgres, an unstubbed search dials the placeholder host and hangs
+    the test on a refused connection. Stated outright instead of inferred.
+    """
+    import services.retrieval as retrieval
+
     monkeypatch.setattr(ingestion, "embed_and_store", lambda *a, **k: None)
+    monkeypatch.setattr(retrieval, "search_similar", lambda q, limit, *, user_id=None: [])
 
 
 @pytest.fixture(autouse=True)

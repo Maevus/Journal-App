@@ -51,7 +51,7 @@ async def main() -> int:
     force = "--force" in sys.argv
 
     print(f"GOODNOTES_PATH = {os.getenv('GOODNOTES_PATH')}")
-    print(f"DATABASE_URL   = {os.getenv('DATABASE_URL', 'sqlite:///./journal.db')}")
+    print(f"DATABASE_URL   = {os.getenv('DATABASE_URL', '(unset — config will refuse)')}")
     print(f"force          = {force}\n")
     print("Scanning (each new page is one Claude-vision call)...")
 

@@ -7,15 +7,10 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 from clock import utcnow_naive
 from config import DATABASE_URL
 
-# `check_same_thread` is a SQLite-only connect arg (psycopg rejects it); pool
-# pre-ping only earns its keep against a networked server. Branch on the URL so
-# the same engine construction serves SQLite (tests, demo) and Postgres (real).
-_is_sqlite = DATABASE_URL.startswith("sqlite")
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False} if _is_sqlite else {},
-    pool_pre_ping=not _is_sqlite,
-)
+# Postgres only (config.py rejects anything else). pool_pre_ping because the
+# server is over a socket and connections go stale; tests build their own engine
+# and never reach here.
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 
 class JournalEntry(SQLModel, table=True):
