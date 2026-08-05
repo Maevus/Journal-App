@@ -24,6 +24,7 @@ from sqlmodel import Session, select
 
 from clock import utcnow_naive
 from models.journal import JournalEntry, engine
+from models.ocr import BlankPage
 from services.embeddings import embed_and_store
 from services.llm_client import stream_text
 from services.quota import QuotaExceededError
@@ -601,6 +602,27 @@ def _is_blank_transcript(text: str) -> bool:
     return len(t) < 80 and ("no text" in t or "blank" in t or "nothing to transcribe" in t)
 
 
+def _page_is_blank_tombstoned(session: Session, external_id: str) -> bool:
+    """True if this page already OCR'd to nothing on an earlier scan."""
+    return session.exec(
+        select(BlankPage).where(
+            BlankPage.source == "goodnotes",
+            BlankPage.external_id == external_id,
+        )
+    ).first() is not None
+
+
+def _record_blank_page(session: Session, external_id: str, *, user_id: Optional[int]) -> None:
+    """Tombstone a page that OCR'd empty, so it is never transcribed again.
+
+    Idempotent — `force=True` re-OCRs a tombstoned page and lands back here.
+    """
+    if _page_is_blank_tombstoned(session, external_id):
+        return
+    session.add(BlankPage(source="goodnotes", external_id=external_id, user_id=user_id))
+    session.commit()
+
+
 def _page_already_imported(session: Session, external_id: str) -> bool:
     """True if a GoodNotes entry already exists for this page's external_id.
 
@@ -682,7 +704,10 @@ async def ingest_goodnotes(
             last_date: Optional[datetime] = None
             for page_num, page_bytes in enumerate(page_pdfs, start=1):
                 external_id = f"{resolved.name}#p{page_num}"
-                if not force and _page_already_imported(session, external_id):
+                if not force and (
+                    _page_already_imported(session, external_id)
+                    or _page_is_blank_tombstoned(session, external_id)
+                ):
                     continue
                 try:
                     text = await _ocr_with_claude(page_bytes, "application/pdf", user_id=owner)
@@ -695,6 +720,7 @@ async def ingest_goodnotes(
                     break
                 ocr_calls += 1
                 if _is_blank_transcript(text):
+                    _record_blank_page(session, external_id, user_id=owner)
                     continue
                 parsed = parse_inline_date(text, fallback=last_date or file_mtime)
                 # Notebooks move forward in time: a parsed date earlier than
@@ -713,7 +739,10 @@ async def ingest_goodnotes(
                 )
         else:
             external_id = resolved.name
-            if not force and _page_already_imported(session, external_id):
+            if not force and (
+                _page_already_imported(session, external_id)
+                or _page_is_blank_tombstoned(session, external_id)
+            ):
                 continue
             try:
                 text = await _ocr_with_claude(
@@ -724,7 +753,9 @@ async def ingest_goodnotes(
                 quota_hit = True
                 break
             ocr_calls += 1
-            if not _is_blank_transcript(text):
+            if _is_blank_transcript(text):
+                _record_blank_page(session, external_id, user_id=owner)
+            else:
                 raw_entries.append(
                     RawEntry(content=text, timestamp=file_mtime, external_id=external_id)
                 )

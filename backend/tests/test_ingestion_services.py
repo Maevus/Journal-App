@@ -9,6 +9,7 @@ from sqlmodel import select
 
 import services.ingestion as ing
 from models.journal import JournalEntry
+from models.ocr import BlankPage
 from models.user import User
 from services.ingestion import RawEntry
 from services.quota import QuotaExceededError
@@ -348,6 +349,78 @@ async def test_ingest_goodnotes_force_reocrs_all_pages(session, monkeypatch, tmp
     # force=True re-OCRs every page even though all already exist.
     await ing.ingest_goodnotes(session, force=True)
     assert spy.calls == 6
+
+
+# --- blank-page tombstones -------------------------------------------------
+
+class _BlankOCRSpy:
+    """Counting spy that reports every page as empty."""
+
+    def __init__(self):
+        self.calls = 0
+
+    async def __call__(self, file_bytes, media_type, *, user_id):
+        self.calls += 1
+        return "[BLANK]"
+
+
+async def test_blank_pages_are_tombstoned_and_never_reocrd(
+    session, monkeypatch, tmp_path, sync_owner
+):
+    """A blank page writes no entry, so only a tombstone stops it being
+    re-transcribed — at full price — on every scan."""
+    _write_pdf_pages(tmp_path / "Journal.pdf", 3)
+    spy = _BlankOCRSpy()
+    _setup_goodnotes(monkeypatch, tmp_path, spy)
+
+    stats, _ = await ing.ingest_goodnotes(session)
+    assert stats["ingested"] == 0
+    assert spy.calls == 3
+    assert len(session.exec(select(BlankPage)).all()) == 3
+
+    stats2, _ = await ing.ingest_goodnotes(session)
+    assert spy.calls == 3  # unchanged — the whole point
+    assert stats2["ingested"] == 0
+
+
+async def test_force_reocrs_blank_page_without_duplicating_tombstone(
+    session, monkeypatch, tmp_path, sync_owner
+):
+    _write_pdf_pages(tmp_path / "Journal.pdf", 1)
+    spy = _BlankOCRSpy()
+    _setup_goodnotes(monkeypatch, tmp_path, spy)
+
+    await ing.ingest_goodnotes(session)
+    await ing.ingest_goodnotes(session, force=True)
+
+    assert spy.calls == 2  # force still re-reads it
+    assert len(session.exec(select(BlankPage)).all()) == 1
+
+
+async def test_tombstoned_blank_does_not_block_pages_with_text(
+    session, monkeypatch, tmp_path, sync_owner
+):
+    """A blank cover page must not stop the rest of the notebook ingesting."""
+    _write_pdf_pages(tmp_path / "Journal.pdf", 2)
+
+    class _CoverThenText:
+        calls = 0
+
+        async def __call__(self, file_bytes, media_type, *, user_id):
+            type(self).calls += 1
+            if type(self).calls == 1:
+                return "[BLANK]"
+            return "12 Jan 2026\nA real entry"
+
+    _setup_goodnotes(monkeypatch, tmp_path, _CoverThenText())
+
+    stats, _ = await ing.ingest_goodnotes(session)
+    assert stats["ingested"] == 1
+    assert _CoverThenText.calls == 2
+
+    stats2, _ = await ing.ingest_goodnotes(session)
+    assert _CoverThenText.calls == 2  # neither page re-read
+    assert stats2["ingested"] == 0
 
 
 async def test_redate_keep_updates_timestamp(session, monkeypatch):
