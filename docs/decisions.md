@@ -838,3 +838,74 @@ matched".
   nowhere near the query" is not something real text expresses reliably. Teeth
   checked: with iterative scan off, the crowded-index test returns `[]` and the
   ordering test returns nothing to order.
+
+## Postgres is the only database (2026-08-05)
+
+Commits `75874e4`, `11561e0`, `ca6adae`.
+
+- **The incident.** The app ran on SQLite by default and Postgres when configured,
+  so both were live and both were written to. They diverged: `journal.db` held 33
+  GoodNotes entries Postgres had never seen, Postgres held 7 Keep notes and the
+  65-entry demo seed that SQLite lacked. Neither side was a superset. Nothing
+  announced the split — both databases simply worked.
+- **No fallback, by design.** `config.py` now has no `DATABASE_URL` default and
+  rejects a non-Postgres URL. A missing setting is a boot failure rather than a
+  second source of truth opened silently on disk. `APP_MODE` returns to meaning
+  what it says — which user requests resolve to, and whether Keep sync runs — and
+  no longer selects a database. `scripts/dev.sh` exports the URL for both modes.
+- **Reconciled additively, not by wiping.** `migrate_sqlite_to_pg.py` refused
+  non-empty targets and pointed at `docker compose down -v`, which would have
+  destroyed the Postgres-only rows. A one-off script matched on
+  `(user, content_hash)` — the app's own dedup key — and inserted only what was
+  missing. 1085 entries, then re-embedded. Both databases were dumped first.
+- **Tests stay on in-memory SQLite.** It holds nothing and vanishes with the
+  process, so it is not a source of truth. `conftest.py` sets a placeholder
+  `DATABASE_URL` so the Postgres-only config imports, then swaps the engine. The
+  known cost: SQLite does not enforce foreign keys without `PRAGMA foreign_keys=ON`,
+  so a test can build rows Postgres would reject — demonstrated, not theoretical.
+  Unresolved; see the handoff.
+
+## The healthcheck gets its own endpoint (2026-08-05)
+
+Commit `da39150`.
+
+- The container `HEALTHCHECK` probed `/trends`, which later gained
+  `get_current_user`. `curl -fsS` treats the resulting 401 as failure, so any
+  private deployment reported unhealthy forever while serving correctly. It passed
+  only as the demo deployment, where a logged-out visitor resolves to the demo user.
+- `/health` is unauthenticated, user-agnostic, and runs `SELECT 1`, so green means
+  process *and* database. A route that exists only to be probed cannot drift the
+  way a data route can.
+- The Dockerfile comment had asserted "/trends answers without a database
+  round-trip for an unauthenticated caller" — true when written, false once auth
+  landed, and nothing pointed back at it.
+
+## GoodNotes connector: loud failures, and blank-page tombstones (2026-08-05)
+
+Commits `d4a9d7b`, `fb66230`.
+
+- **A stale path looked identical to an empty inbox.** Google Drive renamed the
+  export folder (`Notes` → `Notes (1)`), `GOODNOTES_PATH` still pointed at the old
+  name, and `ingest_goodnotes` returned plain zeros — exactly what a scan with no
+  new pages returns. Seven weeks of entries went unimported with no symptom. Now an
+  ERROR log plus an explicit `error` key in the returned stats.
+- **`GOODNOTES_PATH` points at the parent folder.** The scan recurses, so the
+  parent survives the next rename. `external_id` stays basename-derived, so moving
+  the path re-OCRs nothing.
+- **Blank pages get a tombstone row.** A page that OCRs to nothing produces no
+  `JournalEntry`, so `_page_already_imported` never matched it and every scan paid
+  Claude vision to re-read it. The `blank_pages` table records "seen, empty".
+
+## Comments state what the code does (2026-08-05)
+
+Commits `65505f2`, `885dc7a`.
+
+- Rule written into `CLAUDE.md` under `## Comments`: one or two lines, no history,
+  no thought process, no restating the code. Long comments get skipped, so a short
+  one communicates more.
+- History belongs in `git log`; design rationale belongs here or in `docs/adr/`.
+  This file is where the prose stripped from the code went.
+- Applied across the codebase: 92 files, net −699 lines of comment. Verified by AST
+  comparison that no code changed. Load-bearing facts were compressed, never
+  deleted — the forged-`X-Forwarded-For` warning, the Postgres 18 volume-path
+  gotcha, the `ON CONFLICT` composite key, the advisory lock.
