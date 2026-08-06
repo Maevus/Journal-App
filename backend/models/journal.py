@@ -18,9 +18,8 @@ class JournalEntry(SQLModel, table=True):
     __table_args__ = (UniqueConstraint("user_id", "content_hash", name="uq_user_content"),)
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    # Owner (ADR 0003), NOT NULL since the Postgres migration — legacy rows were
-    # backfilled (scripts/backfill_owner.py) so none survive unowned. Ingest paths
-    # must stamp a user_id; the user-less startup sync assigns the Keep account's.
+    # Owner (ADR 0003), NOT NULL — every entry has one. Ingest paths must stamp a
+    # user_id; the user-less startup sync assigns the Keep account's.
     user_id: int = Field(foreign_key="users.id", index=True)
     source: str  # "google_keep" | "goodnotes" | "text"
     content: str

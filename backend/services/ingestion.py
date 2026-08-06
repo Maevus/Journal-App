@@ -414,8 +414,8 @@ def _fetch_keep_entries() -> List[RawEntry]:
 
 def _resolve_sync_owner(session: Session) -> Optional[int]:
     """Resolves the Keep/GoodNotes connector owner from GOOGLE_EMAIL (single
-    account, pre-multi-user). Unowned (NULL) until that user logs in — fixed
-    retroactively by scripts/backfill_owner.py.
+    account, pre-multi-user). Returns None until that user logs in, which defers
+    ingestion rather than inserting unowned rows.
     """
     from models.user import User
 
