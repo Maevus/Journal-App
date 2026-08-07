@@ -4,6 +4,7 @@ import {
   AUTH_EXPIRED_EVENT,
   KEY_CHANGED_EVENT,
   chatStreamUrl,
+  deleteAccount,
   deleteApiKey,
   exportUrl,
   fetchEntriesByDate,
@@ -246,6 +247,23 @@ describe('auth', () => {
     expect(url).toBe(`${BASE}/auth/logout`)
     expect(init.method).toBe('POST')
     expect(init.credentials).toBe('include')
+  })
+
+  it('deleteAccount POSTs the confirmation word and returns the row counts', async () => {
+    const fn = mockAuthFetch(200, { status: 'deleted', deleted: { journalentry: 12, users: 1 } })
+
+    expect(await deleteAccount()).toEqual({ journalentry: 12, users: 1 })
+
+    const [url, init] = fn.mock.calls[0]
+    expect(url).toBe(`${BASE}/auth/delete-account`)
+    expect(init.method).toBe('POST')
+    expect(init.credentials).toBe('include')
+    expect(JSON.parse(init.body)).toEqual({ confirm: 'DELETE' })
+  })
+
+  it('deleteAccount surfaces the backend detail (the demo account 403s)', async () => {
+    mockAuthFetch(403, { detail: 'The shared demo account cannot be deleted' })
+    await expect(deleteAccount()).rejects.toThrow(/shared demo account/)
   })
 })
 

@@ -67,4 +67,17 @@ describe('AccountPanel', () => {
     fireEvent.click(screen.getByRole('tab', { name: /usage/i }))
     expect(await screen.findByText(/your key · opus/i)).toBeInTheDocument()
   })
+
+  it('reaches account deletion from its own tab, and never opens on it', async () => {
+    vi.mocked(client.fetchKeyStatus).mockResolvedValue({ has_key: false, provider: 'anthropic' })
+    render(<AccountPanel demo={false} />)
+    // The no-key default is the API-key tab, not the destructive one.
+    await screen.findByPlaceholderText(/sk-ant/)
+    const deleteTab = screen.getByRole('tab', { name: /delete account/i })
+    expect(deleteTab).toHaveAttribute('aria-selected', 'false')
+
+    fireEvent.click(deleteTab)
+
+    expect(await screen.findByRole('button', { name: /delete my account/i })).toBeDisabled()
+  })
 })

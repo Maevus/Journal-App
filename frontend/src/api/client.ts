@@ -173,6 +173,33 @@ export async function logout(): Promise<void> {
   if (!res.ok) throw new Error(`Logout failed: ${res.statusText}`)
 }
 
+/** The word the delete-account body must carry — routers/auth.py rejects any
+ *  other. The UI gates the button on the user typing it. */
+export const DELETE_CONFIRMATION = 'DELETE'
+
+/** Erase the account and everything in it (POST /auth/delete-account). The
+ *  server clears the session cookie, so the caller is logged out on return.
+ *  Resolves to the rows deleted per table. */
+export async function deleteAccount(): Promise<Record<string, number>> {
+  const res = await fetch(`${BASE_URL}/auth/delete-account`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: DELETE_CONFIRMATION }),
+  })
+  reportIfAuthExpired(res)
+  if (!res.ok) {
+    let detail: string | undefined
+    try {
+      detail = ((await res.json()) as { detail?: string }).detail
+    } catch {
+      /* no JSON body */
+    }
+    throw new Error(detail ?? `Deleting the account failed: ${res.statusText}`)
+  }
+  return ((await res.json()) as { deleted: Record<string, number> }).deleted
+}
+
 /** Fired after the user's BYO key is saved or removed; tier-dependent views
  *  (usage widget's model chip and cap) refetch on it. */
 export const KEY_CHANGED_EVENT = 'journal:key-changed'

@@ -109,8 +109,9 @@ to protect them. Work top-down; the first two sections are the ones that actuall
 
 - [ ] Privacy note stating what's stored, that keys are encrypted, and that entries are sent to the model provider.
 - [ ] Users can export their data.
-- [x] Users can delete their account and everything in it. — backend done (§2); still
-      needs a frontend affordance, so it is not yet reachable by a user.
+- [x] Users can delete their account and everything in it. — backend in §2; reachable
+      from the Account card's "Delete account" tab, which unlocks only once the user
+      types `DELETE`.
 - [ ] A contact route for reporting a security issue.
 
 ---
