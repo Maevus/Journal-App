@@ -24,7 +24,11 @@ to protect them. Work top-down; the first two sections are the ones that actuall
 - [ ] Test explicitly: log in as user A, request user B's entry / settings / vector results. Should 404.
 - [ ] Vector search is scoped per user — no cross-tenant retrieval leakage in RAG results.
 - [ ] Background jobs / exports carry the correct user scope.
-- [ ] Account deletion removes entries, embeddings, and keys — not just the user row.
+- [x] Account deletion removes entries, embeddings, and keys — not just the user row.
+      `POST /auth/delete-account` → `services/account.py`. Nine tables, children first,
+      one transaction; `entry_embeddings` needs its own raw-SQL delete because it is
+      outside `SQLModel.metadata`. Demo user guarded at route and service.
+      Covered by `test_account_deletion.py` and `test_account_deletion_pg.py`.
 
 ## 3. Secrets & configuration
 
@@ -105,7 +109,8 @@ to protect them. Work top-down; the first two sections are the ones that actuall
 
 - [ ] Privacy note stating what's stored, that keys are encrypted, and that entries are sent to the model provider.
 - [ ] Users can export their data.
-- [ ] Users can delete their account and everything in it.
+- [x] Users can delete their account and everything in it. — backend done (§2); still
+      needs a frontend affordance, so it is not yet reachable by a user.
 - [ ] A contact route for reporting a security issue.
 
 ---

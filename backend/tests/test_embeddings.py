@@ -28,3 +28,9 @@ def test_search_similar_empty_off_postgres(monkeypatch):
 
     assert emb.search_similar("query", user_id=1) == []
     assert embedded == []  # short-circuits before embedding the query
+
+
+def test_delete_user_embeddings_noops_off_postgres(session):
+    """`session` is SQLite, which has no entry_embeddings table — account
+    deletion must skip it rather than raise."""
+    assert emb.delete_user_embeddings(session, user_id=1) == 0

@@ -100,3 +100,17 @@ def test_vector_query_is_isolated_per_user(pg):
 
     assert [i for i, _ in emb.search_similar("climbing", limit=5, user_id=1)] == [1]
     assert [i for i, _ in emb.search_similar("climbing", limit=5, user_id=2)] == [2]
+
+
+def test_delete_user_embeddings_removes_only_that_users_vectors(pg):
+    """Account deletion's vector-store leg (services/account.py)."""
+    _store(pg, 1, 1, "climbing at the bouldering gym")
+    _store(pg, 2, 2, "baking sourdough bread")
+
+    with Session(pg) as s:
+        removed = emb.delete_user_embeddings(s, user_id=1)
+        s.commit()
+
+    assert removed == 1
+    assert emb.search_similar("anything", limit=5, user_id=1) == []
+    assert [i for i, _ in emb.search_similar("anything", limit=5, user_id=2)] == [2]

@@ -10,13 +10,15 @@ import logging
 from typing import Optional
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
-from fastapi import APIRouter, Cookie, Depends, Request, Response, status
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel
 from sqlmodel import Session
 
 import config
 from models.journal import get_session
 from models.user import User
+from services.account import delete_account
 from services.auth import (
     SESSION_COOKIE,
     SESSION_TTL,
@@ -24,6 +26,7 @@ from services.auth import (
     get_current_user,
     get_or_create_user,
     is_demo_user,
+    require_writable_user,
     revoke_session,
 )
 from services.rate_limit import TIER_AUTH, rate_limit
@@ -111,3 +114,34 @@ def logout(
     """Revoke the session server-side, then clear the cookie."""
     revoke_session(db, session_token)
     response.delete_cookie(SESSION_COOKIE)
+
+
+# The word the body must carry. A POST with a confirmation, not a bare DELETE,
+# so nothing erases an account by guessing a verb.
+DELETE_CONFIRMATION = "DELETE"
+
+
+class AccountDeletion(BaseModel):
+    confirm: str
+
+
+@router.post("/delete-account", dependencies=[Depends(rate_limit(TIER_AUTH))])
+def delete_my_account(
+    body: AccountDeletion,
+    response: Response,
+    user: User = Depends(require_writable_user),
+    db: Session = Depends(get_session),
+):
+    """Erase the account and everything in it, then log the caller out.
+
+    `require_writable_user` keeps the shared demo account undeletable — one
+    visitor deleting it would empty the demo for everyone.
+    """
+    if body.confirm != DELETE_CONFIRMATION:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            f'Send {{"confirm": "{DELETE_CONFIRMATION}"}} to delete the account.',
+        )
+    counts = delete_account(db, user)
+    response.delete_cookie(SESSION_COOKIE)
+    return {"status": "deleted", "deleted": counts}

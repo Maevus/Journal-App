@@ -9,6 +9,7 @@ import logging
 from typing import List, Tuple
 
 from sqlalchemy import text
+from sqlmodel import Session
 
 import config
 from models.journal import engine
@@ -105,3 +106,17 @@ def search_similar(query: str, limit: int = 10, *, user_id: int) -> List[Tuple[i
             {"q": q, "uid": user_id, "n": limit},
         ).all()
     return [(int(eid), float(sim)) for eid, sim in rows]
+
+
+def delete_user_embeddings(session: Session, *, user_id: int) -> int:
+    """Delete `user_id`'s vectors, returning the row count.
+
+    Raw SQL on `session` (not `engine`), so the delete joins the caller's
+    transaction. No-op off Postgres, where the table doesn't exist.
+    """
+    if session.get_bind().dialect.name != "postgresql":
+        return 0
+    result = session.execute(
+        text("DELETE FROM entry_embeddings WHERE user_id = :uid"), {"uid": user_id}
+    )
+    return result.rowcount or 0
