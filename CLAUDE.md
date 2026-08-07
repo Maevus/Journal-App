@@ -118,7 +118,7 @@ Same applies to docstrings and commit-message bodies.
 
 ## Architecture
 
-Full-stack personal journal analytics app: React SPA + FastAPI backend.
+Woolgather — a full-stack personal journal analytics app: React SPA + FastAPI backend.
 
 ```
 /backend                    — FastAPI app (run from this directory)

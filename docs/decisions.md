@@ -909,3 +909,14 @@ Commits `65505f2`, `885dc7a`.
   comparison that no code changed. Load-bearing facts were compressed, never
   deleted — the forged-`X-Forwarded-For` warning, the Postgres 18 volume-path
   gotcha, the `ON CONFLICT` composite key, the advisory lock.
+
+## The product is called Woolgather (2026-08-07)
+
+- "Journal Analytics" was a scaffold placeholder. The product name is now
+  **Woolgather**, in the SPA title, both `<h1>`s, the FastAPI `title`, and the docs.
+- **Infrastructure names stay `journal`** — the Postgres database/user, the
+  `journal-postgres` container, the `journal_pgdata` volume, the compose project,
+  `JOURNAL_DOMAIN`, the image tag, the repo directory, and the Python packages.
+  Renaming them would orphan the live data volume for a cosmetic change.
+- The two-word `<h1>` (plain word + rotated highlighted word) became the whole
+  one-word name inside the highlight.

@@ -183,7 +183,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Journal Analytics API",
+    title="Woolgather API",
     lifespan=lifespan,
     # The interactive docs publish every route and schema. ENABLE_DOCS=0 (the
     # image's default) removes all three endpoints.
