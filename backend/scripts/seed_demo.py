@@ -1,20 +1,17 @@
-"""Seed a self-contained demo database for showcasing the app.
+"""Seed the demo user for showcasing the app.
 
 Builds ~60 hand-crafted entries spanning ~6 months across all three sources,
 mood scores matching each entry's tone, so chart/filter/drill-down/synthesis
-all have something real to show. Never touches the real `journal.db`.
+all have something real to show. The wipe is demo-user-scoped, so seeding into
+the shared Postgres never touches another user's journal.
 
-Semantic search is dormant here — the vector store is pgvector (Postgres-only),
-so `embed_and_store` no-ops on a SQLite target. Keep external_ids are fake
-(`demo-keep-…`); "Open in Keep" links render but won't resolve. Timestamps are
-relative to "now" so the demo always looks fresh.
+Keep external_ids are fake (`demo-keep-…`); "Open in Keep" links render but
+won't resolve. Timestamps are relative to "now" so the demo always looks fresh.
 
 Usage (from backend/):
 
-    .venv/bin/python scripts/seed_demo.py     # rebuilds demo db from scratch
-    APP_MODE=demo uvicorn main:app            # serve the demo stack
-
-APP_MODE=demo also turns Keep sync off, so real notes can't sync into the demo db.
+    .venv/bin/python scripts/seed_demo.py     # reseed the demo user
+    PUBLIC_DEMO=1 uvicorn main:app            # serve it to signed-out visitors
 """
 import os
 import sys
@@ -24,12 +21,6 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 os.chdir(BACKEND_DIR)
 sys.path.insert(0, str(BACKEND_DIR))
-
-# DATABASE_URL set → seed the shared Postgres demo user (shape B, search works).
-# Unset → fall back to the SQLite demo db (APP_MODE=demo, search dormant).
-# Must be set before importing config, which reads the env at import time.
-if not os.getenv("DATABASE_URL"):
-    os.environ["APP_MODE"] = "demo"
 
 from sqlmodel import Session, select  # noqa: E402
 
@@ -344,7 +335,7 @@ def main() -> None:
         print(f"  {source:12s} {n}")
     print(
         "\nServe it: point the app at the same DB and set PUBLIC_DEMO=1 so signed-out\n"
-        "visitors see the demo (or APP_MODE=demo for a standalone everyone-is-demo run)."
+        "visitors see the demo."
     )
 
 

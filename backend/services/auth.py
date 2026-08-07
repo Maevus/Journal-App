@@ -132,14 +132,13 @@ def get_current_user(
 ) -> User:
     """FastAPI dependency: the current `User`, or 401. The auth gate.
 
-    Order: a valid session wins. Else the seeded demo user if `IS_DEMO`
-    (everyone is demo) or `PUBLIC_DEMO` (signed-out visitors see the read-only
-    demo). Else 401.
+    Order: a valid session wins. Else the seeded demo user if `PUBLIC_DEMO`
+    (signed-out visitors see the read-only demo). Else 401.
     """
     user = resolve_session(db, session_token)
     if user is not None:
         return user
-    if config.IS_DEMO or config.PUBLIC_DEMO:
+    if config.PUBLIC_DEMO:
         return get_or_create_user(db, google_sub=DEMO_GOOGLE_SUB, email=DEMO_EMAIL)
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,

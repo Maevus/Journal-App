@@ -15,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
 
-# Import after load_dotenv so APP_MODE / DB paths reflect .env, not just the shell.
+# Import after load_dotenv so DATABASE_URL and friends reflect .env, not just the shell.
 import config  # noqa: E402
 
 # Import models so SQLModel registers their tables before create_all
@@ -151,11 +151,12 @@ def _start_goodnotes_scheduler(scan=_scheduled_goodnotes_scan):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _configure_logging()  # before the first app log line below
-    # Launch banner so the operator sees at a glance which DB is live.
+    # Launch banner so the operator sees at a glance which DB is live and
+    # whether a signed-out visitor gets the demo or the login gate.
     logger.info(
-        "APP_MODE=%s → db=%s sync=%s spa=%s",
-        config.APP_MODE,
+        "db=%s public_demo=%s sync=%s spa=%s",
         config.DATABASE_URL,
+        config.PUBLIC_DEMO,
         config.SYNC_ON_STARTUP,
         config.SPA_DIST_DIR if _SPA_MOUNTED else "none (dev: Vite serves it)",
     )

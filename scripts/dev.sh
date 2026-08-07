@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Start / restart the app in demo or real mode. Kills whatever is already on
-# the ports first, so it's always safe to re-run.
+# Start / restart the app. Kills whatever is already on the ports first, so
+# it's always safe to re-run.
+#
+# The mode picks what a signed-out visitor gets, not which database is used:
+#   demo → PUBLIC_DEMO=1, the seeded demo user, Keep sync off
+#   real → the login gate, Keep sync on
 #
 #   ./scripts/dev.sh demo             # demo backend (:8000) + frontend (:5173)
 #   ./scripts/dev.sh real             # real backend  + frontend
@@ -60,11 +64,18 @@ fi
 # config.py now refuses to start without it. Start Postgres first:
 # `cd backend && docker compose up -d db`.
 export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://journal:journal@localhost:5432/journal}"
+# Demo serves the shared demo account to signed-out visitors, so real Keep
+# notes must not sync in behind it.
+if [ "$mode" = "demo" ]; then
+  demo_env=(PUBLIC_DEMO=1 SYNC_ON_STARTUP=0)
+else
+  demo_env=(PUBLIC_DEMO=0)
+fi
 kill_port "$API_PORT"
-( cd "$BACKEND" && APP_MODE="$mode" .venv/bin/uvicorn main:app --port "$API_PORT" \
+( cd "$BACKEND" && env "${demo_env[@]}" .venv/bin/uvicorn main:app --port "$API_PORT" \
     >"$BACKEND_LOG" 2>&1 & )
-wait_for "http://localhost:$API_PORT/trends" "backend"
-grep -m1 "APP_MODE=" "$BACKEND_LOG" || true
+wait_for "http://localhost:$API_PORT/health" "backend"
+grep -m1 "public_demo=" "$BACKEND_LOG" || true
 echo "✓ backend ($mode) → http://localhost:$API_PORT   log: $BACKEND_LOG"
 
 # --- frontend ---

@@ -920,3 +920,23 @@ Commits `65505f2`, `885dc7a`.
   Renaming them would orphan the live data volume for a cosmetic change.
 - The two-word `<h1>` (plain word + rotated highlighted word) became the whole
   one-word name inside the highlight.
+
+## One demo, and `APP_MODE` is gone (2026-08-07)
+
+- There were two demos. `PUBLIC_DEMO=1` resolved *signed-out* visitors to the
+  demo user; `APP_MODE=demo` resolved *every* request to it, logged-in ones
+  included. Two switches for one feature, and the second could silently serve
+  the demo journal to someone who had signed in.
+- **`PUBLIC_DEMO` is the only demo switch.** Signed out under it → the read-only
+  demo; signed in → your own journal. Off → `LoginGate`, the private instance.
+- **`APP_MODE` deleted entirely.** Without `demo` it had one legal value, and a
+  setting with one value is a vestige. Its only other job was defaulting
+  `SYNC_ON_STARTUP`, which is already its own variable — now defaulting to on,
+  set explicitly to `0` for the demo.
+- `scripts/dev.sh {demo|real}` keeps its vocabulary but the words now describe
+  the front door rather than a mode of the app: `demo` exports
+  `PUBLIC_DEMO=1 SYNC_ON_STARTUP=0`, `real` exports `PUBLIC_DEMO=0`.
+- **No `/demo` route.** With the root already serving the demo to signed-out
+  visitors it would be a second URL for the same page; making it work for a
+  *signed-in* user would mean resolving an identity the session did not
+  authorise, against security-checklist §2.

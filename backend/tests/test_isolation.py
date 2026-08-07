@@ -73,12 +73,13 @@ def test_ingest_stamps_the_logged_in_user(client, login):
         assert [r.user_id for r in rows] == [user.id]
 
 
-def test_demo_mode_auto_logs_in_demo_user(client, monkeypatch):
-    """Demo deployments never 401 (decisions.md): get_current_user resolves to
-    a seeded demo account instead — same isolation code path, no bypass."""
+def test_public_demo_auto_logs_in_demo_user(client, monkeypatch):
+    """A signed-out visitor to a PUBLIC_DEMO instance never 401s (decisions.md):
+    get_current_user resolves to the seeded demo account instead — same
+    isolation code path, no bypass."""
     import config
 
-    monkeypatch.setattr(config, "IS_DEMO", True)
+    monkeypatch.setattr(config, "PUBLIC_DEMO", True)
 
     resp = client.get("/auth/me")  # no cookie at all
 

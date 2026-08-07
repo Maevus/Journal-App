@@ -71,10 +71,11 @@ def test_keys_route_requires_auth(client):
     assert client.post("/keys", json={"api_key": "x"}).status_code == 401
 
 
-def test_demo_mode_blocks_key_management(client, monkeypatch):
-    """Demo logs every visitor into one shared account — a visitor must not set
-    a key on it (every visitor's calls would then run on that key)."""
-    monkeypatch.setattr(config, "IS_DEMO", True)
+def test_demo_visitor_blocked_from_key_management(client, monkeypatch):
+    """PUBLIC_DEMO puts every signed-out visitor on one shared account — a
+    visitor must not set a key on it (every visitor's calls would then run on
+    that key)."""
+    monkeypatch.setattr(config, "PUBLIC_DEMO", True)
     _accept(monkeypatch)
     assert client.post("/keys", json={"api_key": "sk-ant-x"}).status_code == 403
 
@@ -96,7 +97,7 @@ WRITE_ROUTES = [
 
 @pytest.mark.parametrize("method,path,kwargs", WRITE_ROUTES, ids=[r[1] + ":" + r[0] for r in WRITE_ROUTES])
 def test_demo_user_cannot_reach_any_write_route(client, monkeypatch, method, path, kwargs):
-    monkeypatch.setattr(config, "IS_DEMO", True)
+    monkeypatch.setattr(config, "PUBLIC_DEMO", True)
     _accept(monkeypatch)
 
     assert getattr(client, method)(path, **kwargs).status_code == 403

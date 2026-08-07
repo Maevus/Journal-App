@@ -98,8 +98,8 @@ async def callback(request: Request, db: Session = Depends(get_session)):
 def me(user: User = Depends(get_current_user)):
     """Who am I? The SPA calls this on load to decide login state.
 
-    `demo` flags the shared demo account (signed-out under PUBLIC_DEMO, or
-    APP_MODE=demo) so the SPA hides key management and offers "sign in to
+    `demo` flags the shared demo account (a signed-out visitor under
+    PUBLIC_DEMO) so the SPA hides key management and offers "sign in to
     start your own".
     """
     return {"id": user.id, "email": user.email, "demo": is_demo_user(user)}

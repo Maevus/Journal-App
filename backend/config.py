@@ -4,24 +4,13 @@ Postgres is the only database the app runs on — no SQLite fallback; a
 missing DATABASE_URL is an error, not a silent second source of truth.
 (Tests use their own throwaway in-memory SQLite, untouched by this path.)
 
-APP_MODE selects the demo user and Keep-sync default, not the database —
-both modes share one Postgres, and demo-ness is per-user (services/auth.py).
-
-  APP_MODE=real  (default) → sync on
-  APP_MODE=demo            → sync off, requests resolve to the demo user
+PUBLIC_DEMO is the only demo switch: demo-ness is per-user (services/auth.py),
+so one instance serves the demo visitor and real logged-in users at once.
 """
 import os
 import secrets
 from datetime import timedelta
 from pathlib import Path
-
-_MODES = {"real", "demo"}
-
-APP_MODE = os.getenv("APP_MODE", "real").lower()
-if APP_MODE not in _MODES:
-    raise ValueError(f"APP_MODE must be one of {sorted(_MODES)}, got {APP_MODE!r}")
-
-IS_DEMO = APP_MODE == "demo"
 
 # No default — tests set their own engine directly and never import this path.
 DATABASE_URL = os.getenv("DATABASE_URL", "")
@@ -39,10 +28,9 @@ if not DATABASE_URL.startswith(("postgresql", "postgres")):
         "rate-limit upsert all need Postgres, and two engines meant two journals."
     )
 
-# Demo must never pull real Keep notes, so sync defaults off in demo mode.
-SYNC_ON_STARTUP = os.getenv(
-    "SYNC_ON_STARTUP", "0" if IS_DEMO else "1"
-).lower() not in ("0", "false", "no")
+# Whether the startup Google Keep sync runs. Set 0 wherever real notes must not
+# be pulled in — the demo, and any deployment without the Keep credentials.
+SYNC_ON_STARTUP = os.getenv("SYNC_ON_STARTUP", "1").lower() not in ("0", "false", "no")
 
 # Minutes between scheduled GoodNotes folder scans. 0 (default) disables the
 # scheduler; a positive value polls for newly-appended pages.
@@ -75,8 +63,8 @@ BYO_KEY_MODEL = os.getenv("BYO_KEY_MODEL", "claude-opus-4-8")
 DEMO_DAILY_USD = float(os.getenv("DEMO_DAILY_USD", "1"))
 
 # When on, an unauthenticated request resolves to the demo user (read-only)
-# instead of 401. Off (default) = private instance. Distinct from
-# APP_MODE=demo, which resolves EVERY request, even logged-in ones.
+# instead of 401, and signing in gives the caller their own journal.
+# Off (default) = private instance, where a signed-out visitor gets the login gate.
 PUBLIC_DEMO = os.getenv("PUBLIC_DEMO", "0").lower() not in ("0", "false", "no", "")
 
 # Service-wide daily spend cap — the kill-switch bounding the worst day our

@@ -173,9 +173,9 @@ SSE format: each token is JSON-encoded (`json.dumps(token)`) so newlines survive
 
 Mood scoring is a FastAPI `BackgroundTask` — it fires after ingest returns and calls `services/llm_client.py:structured_output`. Failures are silently swallowed.
 
-**Demo**: `scripts/seed_demo.py` seeds ~65 crafted entries (all three sources, a deliberate mood arc) as a **`demo` user**. Demo-ness is **per-user** (`services/auth.py:is_demo_user`), not a global flag, so one instance serves the demo visitor and real users at once. Two ways to run it:
-- **Signed-out demo of the one app (shape B, the hosting shape)**: seed into the shared Postgres (`DATABASE_URL=…pg… python scripts/seed_demo.py`), then run with `PUBLIC_DEMO=1` — a logged-out visitor resolves to the demo user (read-only: `/ingest` + `/keys` 403; chat/search open, bounded by `DEMO_DAILY_USD`), and signing in gives them their own journal. `seed_demo`'s wipe is **demo-user-scoped** (never touches other users). Semantic search works (pgvector embeddings seeded).
-- **Whole-instance demo**: `APP_MODE=demo` resolves *every* request to the demo user and turns Keep sync off. It runs against the same Postgres — `APP_MODE` no longer selects a database, since there is only one.
+**Demo**: `scripts/seed_demo.py` seeds ~65 crafted entries (all three sources, a deliberate mood arc) as a **`demo` user**. Demo-ness is **per-user** (`services/auth.py:is_demo_user`), not a global flag, so one instance serves the demo visitor and real users at once.
+
+**`PUBLIC_DEMO=1` is the only demo switch.** Seed into the shared Postgres (`DATABASE_URL=…pg… python scripts/seed_demo.py`), then run with `PUBLIC_DEMO=1` — a logged-out visitor resolves to the demo user (read-only: `/ingest` + `/keys` 403; chat/search open, bounded by `DEMO_DAILY_USD`), and signing in gives them their own journal. `seed_demo`'s wipe is **demo-user-scoped** (never touches other users). Semantic search works (pgvector embeddings seeded). With it off, a signed-out visitor gets `LoginGate` — the private-instance shape. Pair it with `SYNC_ON_STARTUP=0` so real Keep notes can't sync in behind the demo.
 
 **Restarting both servers**: `scripts/dev.sh {demo|real}` (re-runnable; kills the ports first, then starts backend :8000 + frontend :5173). `scripts/dev.sh demo --api-only` skips Vite; `scripts/dev.sh stop` kills both. Logs go to `/tmp/journal-{backend,frontend}.log`.
 
