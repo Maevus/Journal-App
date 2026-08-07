@@ -1,0 +1,35 @@
+# Build context for backend/Dockerfile is the repo root: the node stage needs
+# frontend/, the python stage needs backend/. Everything below is local state,
+# a secret, or rebuilt inside the image.
+
+.git
+.gitignore
+.DS_Store
+.claude
+.vscode
+docs
+deploy
+mood_board
+scripts
+*.md
+
+**/__pycache__
+**/*.pyc
+
+backend/.venv
+backend/.env
+backend/*.db*
+backend/.pytest_cache
+backend/.coverage*
+backend/htmlcov
+backend/tests
+backend/chroma_db*
+backend/demo_chroma_db
+backend/docker-compose.yml
+backend/Dockerfile
+
+frontend/node_modules
+frontend/dist
+frontend/coverage
+frontend/.env
+frontend/.env.local

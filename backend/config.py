@@ -13,6 +13,7 @@ both modes share one Postgres, and demo-ness is per-user (services/auth.py).
 import os
 import secrets
 from datetime import timedelta
+from pathlib import Path
 
 _MODES = {"real", "demo"}
 
@@ -101,6 +102,15 @@ SESSION_SECRET = os.getenv("SESSION_SECRET") or secrets.token_hex(32)
 
 # Where the callback sends the browser after login — the SPA's origin.
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+
+# --- Serving the SPA from this process (one container, one origin) ---
+# The built frontend. Baked into the image; absent in dev, where Vite serves
+# the SPA on :5173 and main.py skips the mount.
+SPA_DIST_DIR = os.getenv("SPA_DIST_DIR", str(Path(__file__).resolve().parent / "static"))
+
+# /docs, /redoc and /openapi.json. On for dev; backend/Dockerfile sets 0 so
+# the image doesn't publish its API surface (security-checklist.md, 9).
+ENABLE_DOCS = os.getenv("ENABLE_DOCS", "1").lower() not in ("0", "false", "no", "")
 
 # Runs `alembic upgrade head` at startup. Convenient in dev; wrong in
 # production (DDL on real data with no checkpoint, N workers racing) — set

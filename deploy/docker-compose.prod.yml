@@ -1,0 +1,78 @@
+# Production stack: Caddy + API + Postgres on one VPS.
+#   docker compose -f docker-compose.prod.yml up -d --build
+# Secrets come from ./.env — see .env.example. Runbook in ./README.md.
+name: journal
+
+services:
+  db:
+    # Same image as local dev, so the pgvector version is known to be >= 0.8.
+    image: pgvector/pgvector:pg18-trixie
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: journal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/.env}
+      POSTGRES_DB: journal
+    volumes:
+      # Postgres 18 moved the VOLUME to /var/lib/postgresql.
+      - journal_pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U journal -d journal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [journal]
+    # No ports: reachable only from this network.
+
+  api:
+    # Serves the SPA too, so the context is the repo root and the node build
+    # stage runs — a frontend-only change still rebuilds this image.
+    build:
+      context: ..
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: ./.env
+    environment:
+      DATABASE_URL: postgresql+psycopg://journal:${POSTGRES_PASSWORD}@db:5432/journal
+      # Caddy's fixed address below. An exact match works whatever CIDR support
+      # the installed uvicorn has; getting it wrong fails silently both ways.
+      TRUSTED_PROXY_IPS: 172.28.0.2
+      # Migrations are a deploy step — see README.
+      AUTO_MIGRATE: "0"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [journal]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      JOURNAL_DOMAIN: ${JOURNAL_DOMAIN:?set JOURNAL_DOMAIN in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates. Losing this re-requests them and can hit
+      # Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api]
+    networks:
+      journal:
+        ipv4_address: 172.28.0.2
+
+networks:
+  journal:
+    ipam:
+      config:
+        # ip_range keeps the dynamic pool clear of Caddy's fixed .2.
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1
+          ip_range: 172.28.0.128/25
+
+volumes:
+  journal_pgdata:
+  caddy_data:
+  caddy_config:

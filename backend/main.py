@@ -5,9 +5,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select
+from starlette.middleware.gzip import GZipMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 load_dotenv()
@@ -150,10 +153,11 @@ async def lifespan(app: FastAPI):
     _configure_logging()  # before the first app log line below
     # Launch banner so the operator sees at a glance which DB is live.
     logger.info(
-        "APP_MODE=%s → db=%s sync=%s",
+        "APP_MODE=%s → db=%s sync=%s spa=%s",
         config.APP_MODE,
         config.DATABASE_URL,
         config.SYNC_ON_STARTUP,
+        config.SPA_DIST_DIR if _SPA_MOUNTED else "none (dev: Vite serves it)",
     )
     # Self-migrating on boot keeps `uvicorn main:app` a one-liner in dev. In
     # production set AUTO_MIGRATE=0 and run `alembic upgrade head` as a deploy
@@ -178,7 +182,19 @@ async def lifespan(app: FastAPI):
         sync_task.cancel()
 
 
-app = FastAPI(title="Journal Analytics API", lifespan=lifespan)
+app = FastAPI(
+    title="Journal Analytics API",
+    lifespan=lifespan,
+    # The interactive docs publish every route and schema. ENABLE_DOCS=0 (the
+    # image's default) removes all three endpoints.
+    docs_url="/docs" if config.ENABLE_DOCS else None,
+    redoc_url="/redoc" if config.ENABLE_DOCS else None,
+    openapi_url="/openapi.json" if config.ENABLE_DOCS else None,
+)
+
+# JSON responses and the SPA bundle. Starlette excludes text/event-stream, so
+# the two SSE routes are not compressed and keep arriving token by token.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
@@ -226,3 +242,49 @@ def health(session: Session = Depends(get_session)):
         logger.warning("Healthcheck failed: %s", exc)
         raise HTTPException(status_code=503, detail="database unreachable")
     return {"status": "ok"}
+
+
+class _HashedAssets(StaticFiles):
+    """Vite content-hashes every filename under /assets, so each one is immutable."""
+
+    def file_response(self, *args, **kwargs) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+def _mount_spa(app: FastAPI) -> bool:
+    """Serve the built SPA from this origin, so the session cookie is never
+    third-party. Returns False without a build — in dev Vite serves it on :5173."""
+    dist = Path(config.SPA_DIST_DIR).resolve()
+    index = dist / "index.html"
+    if not index.is_file():
+        return False
+
+    # First path segment of every route registered above. The fallback must
+    # leave those to the API, or a mistyped path answers index.html with a 200.
+    api_segments = {r.path.strip("/").split("/")[0] for r in app.routes if getattr(r, "path", "")}
+    api_segments.discard("")
+
+    if (dist / "assets").is_dir():
+        app.mount("/assets", _HashedAssets(directory=dist / "assets"), name="assets")
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    def spa(spa_path: str, request: Request) -> FileResponse:
+        """The requested file if the build has one, else index.html so the app
+        can route the URL itself."""
+        if spa_path.split("/")[0] in api_segments:
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (dist / spa_path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(dist):
+            return FileResponse(candidate)
+        # Only a browser navigation gets the app shell. fetch/curl send */*, and
+        # answering those with HTML would hide a 404 behind a 200.
+        if "text/html" not in request.headers.get("accept", ""):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return FileResponse(index, headers={"Cache-Control": "no-cache"})
+
+    return True
+
+
+_SPA_MOUNTED = _mount_spa(app)

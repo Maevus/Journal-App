@@ -1,0 +1,13 @@
+# Schedule for journal-backup.service. Change OnCalendar here, not in the script.
+[Unit]
+Description=Daily encrypted Postgres backup
+
+[Timer]
+# Host local time. `systemd-analyze calendar '*-*-* 03:17:00'` prints the next run.
+OnCalendar=*-*-* 03:17:00
+RandomizedDelaySec=15m
+# Runs on next boot if the host was off at the scheduled time.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

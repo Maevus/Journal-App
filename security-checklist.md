@@ -66,9 +66,16 @@ to protect them. Work top-down; the first two sections are the ones that actuall
 
 - [ ] App connects as a least-privilege role — not the Postgres superuser.
 - [ ] Connection string uses TLS; DB not exposed to the public internet.
-- [ ] Automated backups enabled **and a restore tested once**.
-- [ ] Backups are encrypted — they contain the same keys the live DB does.
-- [ ] Alembic migrations run as a deliberate step, not automatically on boot.
+- [x] Automated backups enabled **and a restore tested once**. — `deploy/backup/`,
+      daily systemd timer. Restore rehearsed 2026-08-06 into a scratch database:
+      1092 entries and 1092 embeddings back, `vector(384)` intact, HNSW index
+      present, cosine query returned rows. **`OFFSITE_TARGET` still defaults to
+      the same disk** — not yet a real backup.
+- [x] Backups are encrypted — they contain the same keys the live DB does.
+      `age` to a public key; the private half never goes on the server.
+- [x] Alembic migrations run as a deliberate step, not automatically on boot.
+      `AUTO_MIGRATE=0` in the image and in compose; the deploy runs
+      `alembic upgrade head` before starting the API.
 - [ ] Foreign key constraints enforced (SQLite let violations through; Postgres won't).
 
 ## 8. LLM-specific
@@ -85,10 +92,13 @@ to protect them. Work top-down; the first two sections are the ones that actuall
 
 ## 9. Deployment
 
-- [ ] HTTPS enforced; HTTP redirects. HSTS set.
+- [x] HTTPS enforced; HTTP redirects. HSTS set. — Caddy terminates TLS and adds the
+      HTTP→HTTPS redirect itself; `Strict-Transport-Security` is set in the Caddyfile.
 - [ ] Security headers: `X-Content-Type-Options`, `X-Frame-Options` / frame-ancestors, Referrer-Policy.
 - [ ] Dependencies audited (`pip-audit`, `npm audit`) and pinned.
-- [ ] Admin/docs endpoints (`/docs`, `/redoc`) disabled or authenticated in production.
+- [x] Admin/docs endpoints (`/docs`, `/redoc`) disabled or authenticated in production.
+      `ENABLE_DOCS=0` in the image gates `/docs`, `/redoc` and `/openapi.json`.
+      Note the code default is **on** — a non-Docker production run would expose them.
 - [ ] Health check endpoint leaks no version or config detail.
 
 ## 10. Legal / user trust

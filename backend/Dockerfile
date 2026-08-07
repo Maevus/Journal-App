@@ -1,7 +1,21 @@
-# Journal Analytics API — backend image.
-#   docker build -t journal-api backend/
+# Journal Analytics — one image: FastAPI serving both the API and the built SPA.
+#   docker build -f backend/Dockerfile -t journal .     # context is the repo root
 #
 # Stateless: the only writable thing it needs is the Postgres it points at.
+
+FROM node:24-slim AS web
+
+WORKDIR /web
+
+# Lockfile first so a source change doesn't reinstall node_modules.
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+# VITE_API_BASE_URL comes from frontend/.env.production — empty, i.e. same origin.
+RUN npm run build
+
+
 FROM python:3.13-slim AS base
 
 # curl is for the healthcheck; psycopg[binary] ships its own libpq.
@@ -16,7 +30,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # Dependencies first so a code change doesn't reinstall them.
-COPY requirements.txt .
+COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Bake the embedding model in; otherwise fastembed downloads ~90 MB inside the
@@ -27,11 +41,17 @@ from fastembed import TextEmbedding; \
 TextEmbedding('sentence-transformers/all-MiniLM-L6-v2', cache_dir='/opt/fastembed')" \
     && chmod -R a+rX /opt/fastembed
 
-COPY . .
+COPY backend/ .
+
+# main.py mounts this at / when it exists, with an SPA fallback to index.html.
+COPY --from=web /web/dist ./static
 
 # Migrations are a deploy step, not a boot step. Run `alembic upgrade head` once
 # per release, before rolling instances.
 ENV AUTO_MIGRATE=0
+
+# No /docs, /redoc or /openapi.json in a shipped image.
+ENV ENABLE_DOCS=0
 
 RUN useradd --create-home --uid 10001 appuser && chown -R appuser:appuser /app
 USER appuser

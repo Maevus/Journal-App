@@ -1,0 +1,10 @@
+# TLS in front of one container that serves both the SPA and the API, so the
+# session cookie stays first-party and no path prefix is stripped.
+{$JOURNAL_DOMAIN} {
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
+	reverse_proxy api:8000 {
+		# Unbuffered, or both SSE routes stall until the stream ends.
+		flush_interval -1
+	}
+}

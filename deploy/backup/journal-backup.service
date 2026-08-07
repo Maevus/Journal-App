@@ -1,0 +1,17 @@
+# Encrypted Postgres backup, one shot. Triggered by journal-backup.timer.
+# Install to /etc/systemd/system/ — see README.
+[Unit]
+Description=Encrypted Postgres backup for the journal
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+# Leading - so a missing file is not a failure; the script has defaults.
+EnvironmentFile=-/etc/journal-backup/backup.env
+ExecStart=/opt/journal/deploy/backup/backup.sh
+# Needs the docker socket.
+User=root
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=1h
