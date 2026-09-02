@@ -32,7 +32,8 @@ function App() {
         <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-end sm:justify-between">
           <div>
             <h1 className="font-display text-2xl font-bold uppercase tracking-tight sm:text-3xl">
-              <span className="inline-block -rotate-1 bg-rose px-2">Woolgather</span>
+              Journal{' '}
+              <span className="inline-block -rotate-1 bg-rose px-2">Analytics</span>
             </h1>
             <p className="mt-1 text-sm font-medium text-ink/60">
               Patterns from your personal journal

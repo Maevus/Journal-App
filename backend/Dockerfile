@@ -1,4 +1,4 @@
-# Woolgather — one image: FastAPI serving both the API and the built SPA.
+# Journal Analytics — one image: FastAPI serving both the API and the built SPA.
 #   docker build -f backend/Dockerfile -t journal .     # context is the repo root
 #
 # Stateless: the only writable thing it needs is the Postgres it points at.

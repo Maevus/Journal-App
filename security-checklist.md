@@ -1,4 +1,4 @@
-# Woolgather — Pre-Launch Security Checklist
+# Journal Analytics — Pre-Launch Security Checklist
 
 Stack: FastAPI + React/Vite/TS · Postgres · BYOK (user-supplied LLM API keys) · multi-user
 

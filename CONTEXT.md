@@ -1,4 +1,4 @@
-# Woolgather — Context
+# Journal App — Context
 
 A personal journal analytics app: it ingests entries (Google Keep, GoodNotes, plain text),
 scores mood, and lets the owner explore patterns, search, synthesise, and chat over their
