@@ -2,6 +2,7 @@
 exponential backoff (max 3 retries), per-call token + cost logging.
 """
 import asyncio
+import json
 import logging
 import os
 from typing import AsyncGenerator, Optional, Type, TypeVar
@@ -34,6 +35,46 @@ _RETRYABLE = (
     anthropic.APIConnectionError,
     anthropic.APITimeoutError,
 )
+
+
+class LLMProviderError(Exception):
+    """Anthropic refused the call and retrying won't fix it — a bad key, an
+    exhausted credit balance, a rejected request. Carries the message the
+    caller may show the user."""
+
+
+def _provider_detail(exc: anthropic.APIStatusError) -> str:
+    """Anthropic's own explanation, dug out of the error body."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+    return getattr(exc, "message", "") or str(exc)
+
+
+def _provider_error(exc: anthropic.APIStatusError, *, on_own_key: bool) -> LLMProviderError:
+    """Translate a provider failure into what this caller should be told.
+
+    On their own key they can act on Anthropic's words. On ours they can't,
+    and the operator's billing state isn't theirs to see — so the detail is
+    logged and they get the generic line.
+    """
+    detail = _provider_detail(exc)
+    logger.error("Anthropic %s: %s", exc.status_code, detail)
+    if on_own_key:
+        return LLMProviderError(f"Anthropic rejected the call with your API key: {detail}")
+    return LLMProviderError(
+        "The analysis service is unavailable right now. This is on us, not you — "
+        "try again later."
+    )
+
+
+def sse_llm_error_frame(exc: LLMProviderError) -> str:
+    """The named SSE frame both LLM streams emit when the provider fails,
+    inside a 200 — a dropped connection is indistinguishable from a dead server."""
+    payload = {"code": "provider_error", "message": str(exc)}
+    return f"event: llm_error\ndata: {json.dumps(payload)}\n\n"
 
 
 def resolve_model(*, user_id: Optional[int], on_own_key: Optional[bool] = None) -> str:
@@ -119,17 +160,18 @@ def _pre_call(
     user_id: Optional[int],
     prompt_text: str,
     max_tokens: int,
-) -> tuple[str, anthropic.AsyncAnthropic, Optional[int]]:
+) -> tuple[str, anthropic.AsyncAnthropic, Optional[int], bool]:
     """The pre-call policy steps both entry points share, on ONE key read.
 
-    resolve_api_key answers "does this user have a key" once; resolve_model
-    and check_quota reuse it instead of each re-reading the row (F4). Every
-    read here runs BEFORE any API traffic and fails closed — a key row we
-    can't read is a call we don't make, refused the same way callers already
-    handle (the F2 stance).
+    resolve_api_key answers "does this user have a key" once; resolve_model,
+    check_quota and provider-error wording reuse it instead of each re-reading
+    the row (F4). Every read here runs BEFORE any API traffic and fails closed
+    — a key row we can't read is a call we don't make, refused the same way
+    callers already handle (the F2 stance).
 
     Returns the reservation id, which the caller MUST release when the call
-    ends — kept as the third element so that's hard to overlook.
+    ends — kept as the third element so that's hard to overlook, with
+    on_own_key last.
     """
     try:
         api_key = resolve_api_key(user_id=user_id)  # F4: own key if set
@@ -147,7 +189,7 @@ def _pre_call(
         on_own_key=api_key is not None,
         estimated_cost=_worst_case_cost(model, prompt_text=prompt_text, max_tokens=max_tokens),
     )
-    return model, _async_client(api_key), reservation
+    return model, _async_client(api_key), reservation, api_key is not None
 
 
 def _estimate_tokens(text: str) -> int:
@@ -229,7 +271,7 @@ async def stream_text(
     # One key read serves model resolution, the quota gate, and the client
     # (_pre_call), once per call — a retry continues the call already
     # allowed. `model` then flows to both the API call and _log_usage.
-    model, client, reservation = _pre_call(
+    model, client, reservation, on_own_key = _pre_call(
         model,
         user_id=user_id,
         prompt_text=_prompt_text(system, messages),
@@ -289,6 +331,10 @@ async def stream_text(
                         delay,
                     )
                     await asyncio.sleep(delay)
+            except anthropic.APIStatusError as exc:
+                # Ordered after _RETRYABLE, which RateLimitError also matches —
+                # the retry branch has to claim it first.
+                raise _provider_error(exc, on_own_key=on_own_key) from exc
 
         raise last_err  # type: ignore[misc]
     finally:
@@ -318,7 +364,7 @@ async def structured_output(
     `user_id`: required keyword-only billing attribution — see stream_text.
     """
     # One key read serves all three pre-call policy steps — see _pre_call.
-    model, client, reservation = _pre_call(
+    model, client, reservation, on_own_key = _pre_call(
         model,
         user_id=user_id,
         prompt_text=(system or "") + prompt,
@@ -370,6 +416,9 @@ async def structured_output(
                     delay,
                 )
                 await asyncio.sleep(delay)
+            except anthropic.APIStatusError as exc:
+                # See stream_text: this must sit after the retryable branch.
+                raise _provider_error(exc, on_own_key=on_own_key) from exc
 
         raise RuntimeError("structured_output exhausted retries without raising")
     finally:

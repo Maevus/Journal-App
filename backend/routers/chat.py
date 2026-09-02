@@ -12,7 +12,12 @@ from sqlmodel import Session
 from models.journal import get_session
 from models.user import User
 from services.auth import get_current_user
-from services.llm_client import resolve_model, stream_text
+from services.llm_client import (
+    LLMProviderError,
+    resolve_model,
+    sse_llm_error_frame,
+    stream_text,
+)
 from services.quota import QuotaExceededError, sse_quota_frame
 from services.rate_limit import (
     TIER_CHAT,
@@ -167,6 +172,11 @@ async def chat(
         except QuotaExceededError as exc:
             # No sources frame after a refusal — chips for an answer that never happened.
             yield sse_quota_frame(exc)
+            yield "data: [DONE]\n\n"
+            return
+        except LLMProviderError as exc:
+            # No sources frame here either, for the same reason.
+            yield sse_llm_error_frame(exc)
             yield "data: [DONE]\n\n"
             return
         # Structured sources frame (named event) after the text, before [DONE].

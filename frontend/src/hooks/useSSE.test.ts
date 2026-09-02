@@ -132,6 +132,29 @@ describe('useSSE', () => {
     expect(result.current.rateLimited).toMatch(/45s/)
   })
 
+  it('surfaces an llm_error frame as an error, not a refusal notice', async () => {
+    // The provider failed after the call was allowed — unlike quota, that is a
+    // failure, so it lands in `error` and leaves the refusal states clear.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        streamResponse([
+          'event: llm_error\ndata: {"code":"provider_error","message":"The analysis service is unavailable right now."}\n\n',
+          'data: [DONE]\n\n',
+        ]),
+      ),
+    )
+
+    const { result } = renderHook(() => useSSE())
+    act(() => result.current.start(scope))
+
+    await waitFor(() => expect(result.current.isStreaming).toBe(false))
+    expect(result.current.error).toBe('The analysis service is unavailable right now.')
+    expect(result.current.quota).toBeNull()
+    expect(result.current.rateLimited).toBeNull()
+    expect(result.current.text).toBe('')
+  })
+
   it('start() clears a previous refusal notice', async () => {
     const refusal = streamResponse([
       'event: quota\ndata: {"code":"quota_exhausted","message":"daily LLM budget exhausted"}\n\n',

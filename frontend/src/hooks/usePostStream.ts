@@ -11,8 +11,9 @@ import { reportIfAuthExpired } from '../api/client'
  */
 
 /** Handlers for stream-specific named frames, keyed by `event:` name (chat
- *  registers `sources`; synthesis registers none). `quota`/`rate_limited` are
- *  handled here for everyone. Pass a stable object — it feeds `start`'s deps. */
+ *  registers `sources`; synthesis registers none). `quota`/`rate_limited`/
+ *  `llm_error` are handled here for everyone. Pass a stable object — it feeds
+ *  `start`'s deps. */
 export type FrameHandlers = Record<string, (data: string) => void>
 
 /** Module-level so the default argument is referentially stable across renders. */
@@ -44,8 +45,9 @@ function parseFrame(frame: string): { event: string; data: string } {
   return { event, data: dataLines.join('\n') }
 }
 
-/** Human-readable line for a refusal frame. Both carry `{code, message, …}`;
- *  prefer the server's `message` — it knows the budget/window/retry delay. */
+/** Human-readable line for a refusal or llm_error frame. All carry
+ *  `{code, message, …}`; prefer the server's `message` — it knows the
+ *  budget/window/retry delay, or what the provider said. */
 function refusalMessage(data: string, fallback: string): string {
   try {
     const payload = JSON.parse(data) as { message?: string; retry_after?: number }
@@ -94,6 +96,12 @@ export function usePostStream(handlers: FrameHandlers = NO_HANDLERS): UsePostStr
         }
         if (event === 'rate_limited') {
           setRateLimited(refusalMessage(data, 'Too many requests — try again shortly.'))
+          return
+        }
+        // Unlike quota/rate_limited, this one is a failure, not a refusal —
+        // it lands in `error` alongside a dropped connection.
+        if (event === 'llm_error') {
+          setError(refusalMessage(data, 'The analysis service is unavailable right now.'))
           return
         }
         const handler = handlers[event]

@@ -286,6 +286,33 @@ def test_over_budget_streams_quota_frame_without_sources(client, me, monkeypatch
     assert "event: sources" not in r.text
 
 
+async def _failing_stream(*args, **kwargs):
+    """Anthropic rejects the call after the gate allowed it."""
+    from services.llm_client import LLMProviderError
+
+    raise LLMProviderError("The analysis service is unavailable right now.")
+    yield  # unreachable; makes this an async generator like the real thing
+
+
+def test_provider_failure_streams_llm_error_frame_without_sources(client, me, monkeypatch):
+    """Same shape as the quota refusal: `event: llm_error` + a clean [DONE],
+    and no orphan citation chips for an answer that never happened."""
+    monkeypatch.setattr(chat, "hybrid_search", lambda *a, **k: [])
+    monkeypatch.setattr(chat, "parse_date_range", _fake_parse_factory())
+    monkeypatch.setattr(chat, "condense_query", _fake_condense_factory())
+    monkeypatch.setattr(chat, "stream_text", _failing_stream)
+
+    r = client.post(
+        "/stream/chat",
+        json={"messages": [{"role": "user", "content": "how was May?"}], "limit": 5},
+    )
+
+    assert r.status_code == 200
+    assert "event: llm_error" in r.text
+    assert "data: [DONE]" in r.text
+    assert "event: sources" not in r.text
+
+
 def test_chat_gives_agent_per_entry_mood_and_whole_journal_summary(
     client, me, add_entry, monkeypatch
 ):

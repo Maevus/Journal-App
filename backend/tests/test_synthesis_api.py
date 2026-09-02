@@ -9,6 +9,7 @@ from collections import OrderedDict
 from datetime import datetime
 
 import routers.synthesis as synthesis
+from services.llm_client import LLMProviderError
 from services.quota import QuotaExceededError
 
 
@@ -24,6 +25,13 @@ async def _refusing_stream(*args, **kwargs):
     """The gate refuses at first iteration, before any token — exactly like
     the real stream_text with an exhausted budget."""
     raise QuotaExceededError("daily LLM budget exhausted")
+    yield  # unreachable; makes this an async generator like the real thing
+
+
+async def _failing_stream(*args, **kwargs):
+    """Anthropic rejects the call after the gate allowed it — a dead key or an
+    exhausted credit balance."""
+    raise LLMProviderError("The analysis service is unavailable right now.")
     yield  # unreachable; makes this an async generator like the real thing
 
 
@@ -54,6 +62,27 @@ def test_over_budget_streams_quota_frame_and_caches_nothing(client, add_entry, m
     r2 = client.post("/stream/synthesis", json={"days": 0, "limit": 5})
     assert len(calls) == 1
     assert "Hello there" not in r.text  # and the refused response carried no text
+
+
+def test_provider_failure_streams_llm_error_frame_and_caches_nothing(
+    client, add_entry, monkeypatch
+):
+    """A provider failure rides inside the 200 like the quota refusal does — a
+    dropped connection is indistinguishable from a dead server. It must not
+    poison the cache either: the next request has to reach the LLM."""
+    monkeypatch.setattr(synthesis, "_CACHE", OrderedDict())
+    add_entry("a reflective entry", timestamp=datetime(2026, 5, 10))
+    monkeypatch.setattr(synthesis, "stream_text", _failing_stream)
+
+    r = client.post("/stream/synthesis", json={"days": 0, "limit": 5})
+    assert r.status_code == 200
+    assert "event: llm_error" in r.text
+    assert "data: [DONE]" in r.text
+
+    calls = []
+    monkeypatch.setattr(synthesis, "stream_text", _fake_stream_factory(calls))
+    client.post("/stream/synthesis", json={"days": 0, "limit": 5})
+    assert len(calls) == 1  # nothing was cached under the failed key
 
 
 def test_free_tier_synthesis_runs_resolved_model(client, add_entry, monkeypatch):

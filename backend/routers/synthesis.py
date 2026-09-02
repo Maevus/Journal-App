@@ -16,7 +16,12 @@ from clock import utcnow_naive
 from models.journal import JournalEntry, get_session, user_entries
 from models.user import User
 from services.auth import get_current_user
-from services.llm_client import resolve_model, stream_text
+from services.llm_client import (
+    LLMProviderError,
+    resolve_model,
+    sse_llm_error_frame,
+    stream_text,
+)
 from services.quota import QuotaExceededError, sse_quota_frame
 from services.rate_limit import (
     TIER_SYNTHESIS,
@@ -160,6 +165,12 @@ async def synthesis(
         except QuotaExceededError as exc:
             # Nothing is cached: the refusal is about today's budget, not this prompt's answer.
             yield sse_quota_frame(exc)
+            yield "data: [DONE]\n\n"
+            return
+        except LLMProviderError as exc:
+            # Nothing is cached, as with quota: a provider failure isn't this
+            # prompt's answer.
+            yield sse_llm_error_frame(exc)
             yield "data: [DONE]\n\n"
             return
         _cache_put(key, "".join(chunks))

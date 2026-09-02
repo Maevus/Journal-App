@@ -1,5 +1,6 @@
 """Tests for the Anthropic wrapper (the SDK client is faked — no real API calls)."""
 import asyncio
+import json
 from types import SimpleNamespace
 
 import anthropic
@@ -322,6 +323,123 @@ async def test_structured_output_retries(monkeypatch):
     result = await llm.structured_output("prompt", _Schema, user_id=1)
     assert result.score == 0.5
     assert msgs.create_calls == 2
+
+
+# --- provider errors (the call was allowed; Anthropic said no) -------------
+
+def _credit_error():
+    """A real 400 body: the app key's credit balance is exhausted."""
+    return anthropic.BadRequestError(
+        "credit balance too low",
+        response=httpx.Response(400, request=httpx.Request("POST", "http://t")),
+        body={
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "Your credit balance is too low to access the Anthropic API.",
+            },
+        },
+    )
+
+
+def _raise_credit():
+    raise _credit_error()
+
+
+def _raise_rate_limit():
+    raise anthropic.RateLimitError(
+        "slow down",
+        response=httpx.Response(429, request=httpx.Request("POST", "http://t")),
+        body=None,
+    )
+
+
+def _credit_client(msgs=None):
+    return _client(msgs or _FakeMessages(stream_side_effect=[_raise_credit]))
+
+
+async def test_stream_text_hides_provider_detail_on_the_app_key(monkeypatch):
+    """On our key the operator's billing state isn't the caller's to see."""
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _credit_client())
+    with pytest.raises(llm.LLMProviderError) as err:
+        [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert "credit balance" not in str(err.value)
+    assert "unavailable" in str(err.value)
+
+
+async def test_stream_text_quotes_anthropic_on_the_users_own_key(monkeypatch, meter_db):
+    """On their own key the detail is theirs to act on (F4)."""
+    monkeypatch.setattr(config, "APP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with Session(meter_db) as s:
+        key_store.store_user_key(s, user_id=1, raw_key="sk-ant-user-own")
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _credit_client())
+    with pytest.raises(llm.LLMProviderError) as err:
+        [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert "credit balance is too low" in str(err.value)
+
+
+async def test_a_rate_limit_still_retries_despite_the_status_branch(monkeypatch):
+    """RateLimitError is an APIStatusError too, so the retry branch has to
+    claim it first — otherwise a transient 429 becomes a hard refusal."""
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+    msgs = _FakeMessages(stream_side_effect=[_raise_rate_limit, lambda: _FakeTextStream(["ok"])])
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+    out = [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert out == ["ok"]
+    assert msgs.stream_calls == 2
+
+
+async def test_a_provider_error_releases_its_reservation(monkeypatch, meter_db):
+    """A refused call must hand its worst-case claim back, or a dead API key
+    locks the budget for the whole TTL."""
+    monkeypatch.setattr(config, "FREE_TIER_DAILY_USD", 1.0)
+    monkeypatch.setattr(config, "GLOBAL_DAILY_USD", 100.0)
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _credit_client())
+    with pytest.raises(llm.LLMProviderError):
+        [tok async for tok in llm.stream_text("prompt", user_id=1, max_tokens=100_000)]
+    with Session(meter_db) as s:
+        assert s.exec(select(func.count(QuotaReservation.id))).one() == 0
+
+
+async def test_provider_detail_falls_back_when_the_body_is_not_the_usual_shape(
+    monkeypatch, meter_db
+):
+    """Not every provider error carries `{error: {message}}` — a 5xx with no
+    body must still produce a message rather than blowing up the wording."""
+    monkeypatch.setattr(config, "APP_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    with Session(meter_db) as s:
+        key_store.store_user_key(s, user_id=1, raw_key="sk-ant-user-own")
+
+    def _raise_5xx():
+        raise anthropic.InternalServerError(
+            "upstream exploded",
+            response=httpx.Response(500, request=httpx.Request("POST", "http://t")),
+            body=None,
+        )
+
+    msgs = _FakeMessages(stream_side_effect=[_raise_5xx])
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+    with pytest.raises(llm.LLMProviderError) as err:
+        [tok async for tok in llm.stream_text("prompt", user_id=1)]
+    assert "upstream exploded" in str(err.value)
+
+
+async def test_structured_output_raises_a_provider_error(monkeypatch):
+    msgs = _FakeMessages(create_side_effect=[_credit_error()])
+    monkeypatch.setattr(llm, "_async_client", lambda *a, **k: _client(msgs))
+    with pytest.raises(llm.LLMProviderError):
+        await llm.structured_output("prompt", _Schema, user_id=1)
+    assert msgs.create_calls == 1  # not retryable, so not retried
+
+
+def test_sse_llm_error_frame_is_a_named_frame():
+    frame = llm.sse_llm_error_frame(llm.LLMProviderError("nope"))
+    assert frame.startswith("event: llm_error\ndata: ")
+    assert frame.endswith("\n\n")
+    assert json.loads(frame.split("data: ", 1)[1]) == {
+        "code": "provider_error",
+        "message": "nope",
+    }
 
 
 async def test_stream_text_raises_after_exhausting_retries(monkeypatch):
