@@ -12,6 +12,8 @@ The route to this goal is not yet settled. Handwriting recognition is the centra
 
 Syncing encrypted results to a private account owned by the user is one possible answer, but it requires investigation. Other questions concern key management and recovery, whether search and embeddings can run acceptably on phones, and how any use of an external model should be disclosed to users.
 
+User: refocus on ADHD market? 
+
 ## Phase 1: Research and design
 
 The first phase will review the options for on-device processing, OCR and user-owned storage, then rethink encryption, the data processing flow and the privacy model. The outcome will be a design for the new architecture.
