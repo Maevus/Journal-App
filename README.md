@@ -58,36 +58,14 @@ boot, or `alembic upgrade head` as an explicit deploy step.
                           frames, abort. Both streams run on it
   components/             StreamingPanel, ChatPanel, MoodChart, SearchPanel, DayDetail
 ```
+## Future goals
 
-## Design decisions worth reading
+Reshape it to a local-first app with data processing carried out in the browser (or similar), so that user data is never unencrypted in the cloud to make it appealing to users.
 
-The reasoning is written down as it happened. [`docs/decisions.md`](docs/decisions.md)
-is the running log; [`docs/adr/`](docs/adr/) holds the three decisions big enough to
-need their own document. A few that were more interesting than they look:
+Write sensitive data to users own storage. 
+Browser / multiplatform / sync? 
+Tauri / electron. 
 
-- **[Postgres is the only database](docs/decisions.md#postgres-is-the-only-database-2026-08-05)** — there used to be a SQLite
-  fallback. Running on two engines produced two journals that silently diverged, so
-  the app now refuses to boot without a Postgres URL. No fallback is a feature.
-- **[Quota before the call, with a reservation](docs/decisions.md#quota-reservation--closing-the-read-then-act-race-2026-08-04)** — checking
-  spend then spending is read-then-act: two concurrent requests both read the old
-  total and both pass. The gate reserves under `pg_advisory_xact_lock` instead.
-- **[Rate limits as route dependencies, not middleware](docs/decisions.md#per-identity-rate-limiting-2026-08-04)** —
-  middleware lands outside `CORSMiddleware`, so its 429s arrive without the CORS
-  header and the browser reports a network error instead of a rate limit.
-- **[ANN recall under a per-user filter](docs/decisions.md#ann-recall-under-a-per-user-filter-2026-08-04)** — a filtered HNSW
-  search silently loses recall as the table grows unless `hnsw.iterative_scan` is
-  on, which needs pgvector 0.8+. Failure mode: fewer results, no error.
-- **[ADR 0001 — both LLM streams over POST+fetch](docs/adr/0001-chat-streams-over-post-fetch.md)**
-  — `EventSource` is GET-only, which left a paid LLM call reachable by cross-site
-  navigation.
-- **[ADR 0002 — citation protocol](docs/adr/0002-citation-protocol.md)** — how
-  inline `[n]` markers and the terminal `sources` frame stay in agreement.
-- **[ADR 0003 — multi-user architecture](docs/adr/0003-multi-user-architecture.md)**
-  — the isolation model, the freemium tiers, and BYO keys encrypted at rest.
-
-[`CONTEXT.md`](CONTEXT.md) pins the domain vocabulary — what counts as an *Entry*
-versus a *Turn* versus a *Citation*, and which near-synonyms were deliberately
-rejected.
 
 ## Running it
 
